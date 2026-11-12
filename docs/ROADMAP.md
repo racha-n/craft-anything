@@ -2467,6 +2467,7 @@ Owner: open · Status: in progress
 ### R3.14 Read-only project and scene viewer
 <!-- Explicit user-requested interface follow-up, 2026-11-12. -->
 Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expansion remains open)
+- [ ] Add an identity/appearance evidence audit and revalidate retained controlled cases; preserve unverified native ID and material semantics. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Finish the V2 baseline validation and retain the delivered planning interface in a reviewable commit. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add an interactive orientation cube and persistent scene-bound saved viewpoints through headless tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add task hierarchy folding, Gantt time navigation and explicit task/resource/object selection links; preserve absent native IDs as unknown. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
@@ -2490,9 +2491,10 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
-- [ ] Add camera animation and video export before enabling the grey 4D presentation commands.
+- [ ] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add cost/progress editing and cost charts before enabling the grey Project Controls editing/analysis commands.
-- [ ] Add report generation/templates, docking/named workspaces and saved searches before enabling the corresponding grey commands.
+- [ ] Export source-hash/focus-bound task, resource, budget and actual-expense CSV reports through engine tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [ ] Add report templates, docking/named workspaces and saved searches before enabling their remaining grey commands.
 - [ ] Resolve absent source task display IDs in the admitted real-project case; keep the inspector explicitly unresolved until validated.
 - [ ] Validate remaining material channels, source-opacity conversion, texture sampling and project-wide profile modifiers before claiming native parity.
 - [ ] Validate engineering aggregate quantities, additional expense/rate-window kinds and currency/unit conversion before admitting them.
