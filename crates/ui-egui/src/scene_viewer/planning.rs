@@ -122,13 +122,6 @@ pub const FUTURE_COMMANDS: &[FutureCommand] = &[
         reason: "Planned: record and export a construction-sequence video.",
     },
     FutureCommand {
-        tab: Tab::Review,
-        group: "Review",
-        icon: "clipboard-list",
-        label: "Saved viewpoints",
-        reason: "Planned: save named views and review annotations.",
-    },
-    FutureCommand {
         tab: Tab::Costs,
         group: "Cost editing",
         icon: "clipboard-list",
@@ -185,13 +178,6 @@ pub const FUTURE_COMMANDS: &[FutureCommand] = &[
         label: "Saved searches",
         reason: "Planned: retain named selection and search sets.",
     },
-    FutureCommand {
-        tab: Tab::Navigator,
-        group: "Navigation",
-        icon: "git-branch",
-        label: "View cube",
-        reason: "Planned: an interactive orientation cube. Ribbon camera views already work.",
-    },
 ];
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -202,10 +188,27 @@ pub struct State {
     pub show_properties: bool,
     pub selected_task: Option<String>,
     pub task_filter: String,
+    pub viewpoint_name: String,
+    pub show_cube: bool,
+    pub collapsed_tasks: std::collections::BTreeSet<String>,
+    pub gantt_zoom: f64,
+    pub gantt_position: f64,
 }
 impl Default for State {
     fn default() -> Self {
-        Self { enabled: true, tab: Tab::Plan, show_schedule: true, show_properties: true, selected_task: None, task_filter: String::new() }
+        Self {
+            enabled: true,
+            tab: Tab::Plan,
+            show_schedule: true,
+            show_properties: true,
+            selected_task: None,
+            task_filter: String::new(),
+            viewpoint_name: String::new(),
+            show_cube: true,
+            collapsed_tasks: Default::default(),
+            gantt_zoom: 1.,
+            gantt_position: 0.5,
+        }
     }
 }
 
@@ -372,6 +375,10 @@ impl SceneApp {
                             self.changed();
                         }
                     });
+                    group(ui, "Navigation", |ui| {
+                        self.viewpoints_menu(ui);
+                        ui.checkbox(&mut self.state.planning.show_cube, "View cube");
+                    });
                     match self.state.planning.tab {
                         Tab::File => {
                             group(ui, "Input", |ui| {
@@ -527,7 +534,7 @@ impl SceneApp {
                 self.state.planning.selected_task.as_deref().and_then(|id| self.project_model.as_ref()?.model.tasks.iter().find(|t| t.guid == id))
             {
                 section(ui, "Identity");
-                property(ui, "ID", if task.display_id.is_empty() { "Unresolved" } else { &task.display_id });
+                property(ui, "Native ID", if task.display_id.is_empty() { "Unresolved; grid uses GUID" } else { &task.display_id });
                 property(ui, "Name", &task.name);
                 property(ui, "GUID", &task.guid);
                 section(ui, "Dates");
@@ -579,6 +586,7 @@ impl SceneApp {
             } else {
                 ui.label("Open a project to inspect its contents.");
             }
+            self.planning_selection_links(ui);
             section(ui, "Scope");
             ui.small("Experimental read-only viewer. Unsupported values remain unresolved. Native visual and engineering-quantity parity are not certified.");
         });
@@ -603,18 +611,51 @@ impl SceneApp {
             });
             return;
         };
+        ui.horizontal(|ui| {
+            if ui.button("Expand all").clicked() {
+                self.state.planning.collapsed_tasks.clear();
+            }
+            if ui.button("Collapse all").clicked() {
+                self.state.planning.collapsed_tasks = model.tasks.iter().filter_map(|t| t.parent_guid.clone()).collect();
+            }
+            ui.separator();
+            if ui.button("Zoom time +").clicked() {
+                self.state.planning.gantt_zoom = (self.state.planning.gantt_zoom * 2.).clamp(1., 128.);
+            }
+            if ui.button("Zoom time -").clicked() {
+                self.state.planning.gantt_zoom = (self.state.planning.gantt_zoom / 2.).clamp(1., 128.);
+            }
+            if ui.button("Earlier").clicked() {
+                self.state.planning.gantt_position = (self.state.planning.gantt_position - 0.25 / self.state.planning.gantt_zoom.max(1.)).clamp(0., 1.);
+            }
+            if ui.button("Later").clicked() {
+                self.state.planning.gantt_position = (self.state.planning.gantt_position + 0.25 / self.state.planning.gantt_zoom.max(1.)).clamp(0., 1.);
+            }
+            if ui.button("Fit timeline").clicked() {
+                self.state.planning.gantt_zoom = 1.;
+                self.state.planning.gantt_position = 0.5;
+            }
+        });
+        let parents = model.tasks.iter().map(|t| (t.guid.as_str(), t.parent_guid.as_deref())).collect::<BTreeMap<_, _>>();
         let query = self.state.planning.task_filter.to_lowercase();
         let rows = model
             .tasks
             .iter()
-            .filter(|t| query.is_empty() || t.name.to_lowercase().contains(&query) || t.display_id.to_lowercase().contains(&query))
+            .filter(|t| {
+                if query.is_empty() {
+                    !ancestor_collapsed(&t.guid, &parents, &self.state.planning.collapsed_tasks)
+                } else {
+                    t.name.to_lowercase().contains(&query) || t.display_id.to_lowercase().contains(&query) || t.guid.to_lowercase().contains(&query)
+                }
+            })
             .collect::<Vec<_>>();
         let widths = columns(ui.available_width());
-        let range = timeline_range(&model, self.state.project.best_dates);
+        let range = timeline_range(&model, self.state.project.best_dates)
+            .map(|r| visible_time_range(r, self.state.planning.gantt_zoom, self.state.planning.gantt_position));
         let (header, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 12., 37.), Sense::hover());
         ui.painter().rect_filled(header, 0., p.surface.chrome);
         let mut x = header.left();
-        for (w, label) in widths.table.into_iter().zip(["ID", "Name", "Duration", "Start", "Finish"]) {
+        for (w, label) in widths.table.into_iter().zip(["ID / GUID", "Name", "Duration", "Start", "Finish"]) {
             ui.painter().text(egui::pos2(x + 5., header.center().y), Align2::LEFT_CENTER, label, FontId::proportional(theme::CAPTION), p.surface.text);
             x += w;
             ui.painter().line_segment([egui::pos2(x, header.top()), egui::pos2(x, header.bottom())], Stroke::new(1., p.surface.separator));
@@ -631,7 +672,7 @@ impl SceneApp {
         } else {
             ui.painter().text(chart.center(), Align2::CENTER_CENTER, "Unresolved date range", FontId::proportional(theme::CAPTION), p.surface.text_dim);
         }
-        let parents = model.tasks.iter().map(|t| (t.guid.as_str(), t.parent_guid.as_deref())).collect::<BTreeMap<_, _>>();
+        let mut fold = None;
         let mut picked = None;
         egui::ScrollArea::vertical().id_salt("planning_task_gantt_rows").auto_shrink([false, false]).show_rows(ui, 22., rows.len(), |ui, visible| {
             for index in visible {
@@ -655,7 +696,7 @@ impl SceneApp {
                 let is_parent = model.tasks.iter().any(|t| t.parent_guid.as_deref() == Some(task.guid.as_str()));
                 let duration = if is_parent { "—".into() } else { format!("{:.1} h", task.duration_storage_scalar as f64 / 3600.) };
                 let cells = [
-                    if task.display_id.is_empty() { "—".into() } else { task.display_id.clone() },
+                    if task.display_id.is_empty() { task.guid.chars().take(8).collect() } else { task.display_id.clone() },
                     task.name.clone(),
                     duration,
                     date_short(start),
@@ -664,7 +705,22 @@ impl SceneApp {
                 let mut left = row.left();
                 for (cell, (width, text)) in widths.table.iter().zip(cells).enumerate() {
                     let cell_rect = Rect::from_min_max(egui::pos2(left, row.top()), egui::pos2(left + width, row.bottom()));
-                    let indent = if cell == 1 { task_depth(&task.guid, &parents) as f32 * 9. } else { 0. };
+                    let indent = if cell == 1 { task_depth(&task.guid, &parents) as f32 * 9. + 18. } else { 0. };
+                    if cell == 1 && is_parent {
+                        let toggle = Rect::from_center_size(cell_rect.left_center() + egui::vec2(indent - 5., 0.), egui::vec2(16., 20.));
+                        let response =
+                            crate::widgets::named(ui.interact(toggle, ui.id().with(("fold", &task.guid)), Sense::click()), &format!("Fold task {}", task.guid));
+                        ui.painter().text(
+                            toggle.center(),
+                            Align2::CENTER_CENTER,
+                            if self.state.planning.collapsed_tasks.contains(&task.guid) { "+" } else { "-" },
+                            FontId::proportional(theme::CAPTION),
+                            p.surface.text,
+                        );
+                        if response.clicked() {
+                            fold = Some(task.guid.clone());
+                        }
+                    }
                     ui.painter().with_clip_rect(cell_rect.shrink(3.)).text(
                         cell_rect.left_center() + egui::vec2(4. + indent, 0.),
                         Align2::LEFT_CENTER,
@@ -681,7 +737,10 @@ impl SceneApp {
                     ui.painter().line_segment([egui::pos2(x, row.top()), egui::pos2(x, row.bottom())], Stroke::new(1., p.surface.separator));
                 }
                 if let Some((first, last)) = range {
-                    if let Some((a, b)) = start.zip(finish) {
+                    if let Some((a, b)) = start.zip(finish)
+                        && a <= last
+                        && b >= first
+                    {
                         let a = time_x(a, first, last, chart);
                         let b = time_x(b, first, last, chart);
                         let color = if is_parent { p.summary_bar } else { p.task_bar };
@@ -698,24 +757,34 @@ impl SceneApp {
                         }
                     }
                     let focus = time_x(self.state.project.focus, first, last, chart);
-                    if chart.x_range().contains(focus) {
+                    if (first..=last).contains(&self.state.project.focus) {
                         ui.painter().line_segment([egui::pos2(focus, row.top()), egui::pos2(focus, row.bottom())], Stroke::new(1.5, p.focus_line));
                     }
                 }
                 ui.painter().line_segment([row.left_bottom(), row.right_bottom()], Stroke::new(1., p.surface.separator));
                 if crate::widgets::named(response, &format!("Task {}", task.guid))
-                    .on_hover_text(format!("{}\n{} → {}\nSource planned duration in hours; source remains read only", task.name, date(start), date(finish)))
+                    .on_hover_text(format!(
+                        "{}\nSource GUID: {}\n{} -> {}\nSource planned duration in hours; source remains read only",
+                        task.name,
+                        task.guid,
+                        date(start),
+                        date(finish)
+                    ))
                     .clicked()
                 {
                     picked = Some(task.guid.clone());
                 }
             }
         });
-        if let Some(id) = picked {
+        if let Some(id) = fold {
+            if !self.state.planning.collapsed_tasks.remove(&id) {
+                self.state.planning.collapsed_tasks.insert(id);
+            }
+        } else if let Some(id) = picked {
+            self.state.selected_resource = None;
             self.state.planning.selected_task = Some(id);
             self.state.planning.show_properties = true;
             self.state.selected_instance = None;
-            self.state.selected_resource = None;
             self.changed();
         }
     }
@@ -745,7 +814,7 @@ struct Columns {
 }
 fn columns(width: f32) -> Columns {
     let table = (width * 0.58).clamp(260., 660.);
-    let fixed = if width > 850. { [46., 78., 100., 100.] } else { [35., 60., 78., 78.] };
+    let fixed = if width > 850. { [70., 78., 100., 100.] } else { [70., 60., 78., 78.] };
     Columns { table: [fixed[0], (table - fixed.iter().sum::<f32>()).max(100.), fixed[1], fixed[2], fixed[3]] }
 }
 fn task_dates(task: &craft_anything_engine::tools::scene_project_tools::TaskView, best: bool) -> (Option<i64>, Option<i64>) {
@@ -755,6 +824,27 @@ fn timeline_range(model: &ProjectModel, best: bool) -> Option<(i64, i64)> {
     let start = model.tasks.iter().filter_map(|t| task_dates(t, best).0).min()?;
     let end = model.tasks.iter().filter_map(|t| task_dates(t, best).1).max()?;
     Some((start, end.max(start.saturating_add(1))))
+}
+fn visible_time_range((start, end): (i64, i64), zoom: f64, position: f64) -> (i64, i64) {
+    let zoom = if zoom.is_finite() { zoom.clamp(1., 128.) } else { 1. };
+    let position = if position.is_finite() { position.clamp(0., 1.) } else { 0.5 };
+    let span = (end as f64 - start as f64).max(1.);
+    let width = (span / zoom).max(1.);
+    let left = (position * span - width / 2.).clamp(0., (span - width).max(0.));
+    let a = (start as f64 + left) as i64;
+    let b = (start as f64 + left + width) as i64;
+    (a, b.max(a.saturating_add(1)))
+}
+fn ancestor_collapsed(id: &str, parents: &BTreeMap<&str, Option<&str>>, collapsed: &std::collections::BTreeSet<String>) -> bool {
+    let mut cursor = parents.get(id).copied().flatten();
+    for _ in 0..32 {
+        let Some(parent) = cursor else { return false };
+        if collapsed.contains(parent) {
+            return true;
+        }
+        cursor = parents.get(parent).copied().flatten();
+    }
+    false
 }
 fn time_x(time: i64, start: i64, end: i64, rect: Rect) -> f32 {
     let ratio = ((time as f64 - start as f64) / (end as f64 - start as f64).max(1.)).clamp(0., 1.);
@@ -785,6 +875,18 @@ mod tests {
             assert!(command.reason.starts_with("Planned: ") && command.reason.len() > 25);
         }
         assert!(FUTURE_COMMANDS.iter().any(|c| c.tab == Tab::File && c.label == "Save project"));
+    }
+    #[test]
+    fn time_zoom_and_hierarchy_filter_preserve_search_and_bounds() {
+        assert_eq!(visible_time_range((0, 100), 2., 0.5), (25, 75));
+        assert_eq!(visible_time_range((0, 100), 2., 0.), (0, 50));
+        assert_eq!(visible_time_range((0, 100), 2., 1.), (50, 100));
+        assert_eq!(visible_time_range((0, 100), f64::NAN, f64::NAN), (0, 100));
+        let parents = BTreeMap::from([("root", None), ("child", Some("root")), ("leaf", Some("child"))]);
+        let collapsed = std::collections::BTreeSet::from(["root".to_owned()]);
+        assert!(!ancestor_collapsed("root", &parents, &collapsed));
+        assert!(ancestor_collapsed("child", &parents, &collapsed));
+        assert!(ancestor_collapsed("leaf", &parents, &collapsed));
     }
     #[test]
     fn gantt_uses_real_time_span_and_bounds_extreme_focus() {

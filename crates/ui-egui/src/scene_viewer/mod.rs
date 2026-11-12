@@ -3,6 +3,7 @@ pub mod camera;
 pub mod draw_plan;
 mod gpu;
 mod metadata_panel;
+mod navigation;
 pub mod planning;
 pub mod project_panel;
 use crate::{
@@ -31,7 +32,13 @@ pub struct ViewState {
     #[serde(default)]
     pub planning: planning::State,
 }
+type SelectionKey = (String, Option<String>, Vec<usize>);
 enum Done {
+    SelectionLinks {
+        key: SelectionKey,
+        links: craft_anything_engine::tools::scene_project_tools::SourceSelectionLinks,
+    },
+    Viewpoints(craft_anything_engine::tools::scene_view_tools::Viewpoints),
     Evaluated {
         key: (String, i64, bool, bool, bool),
         latest: Arc<craft_anything_engine::tools::scene_project_tools::LatestProjectFrame>,
@@ -82,6 +89,10 @@ pub struct SceneApp {
     metadata: Option<metadata_panel::MetadataPanel>,
     measurement: Option<serde_json::Value>,
     viewport_rect: Option<egui::Rect>,
+    selection_link_key: Option<SelectionKey>,
+    selection_links: craft_anything_engine::tools::scene_project_tools::SourceSelectionLinks,
+    viewpoints_scene: Option<String>,
+    viewpoints: Vec<craft_anything_engine::tools::scene_view_tools::Viewpoint>,
 }
 impl SceneApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: String) -> Self {
@@ -120,6 +131,10 @@ impl SceneApp {
             metadata: None,
             measurement: None,
             viewport_rect: None,
+            selection_link_key: None,
+            selection_links: Default::default(),
+            viewpoints_scene: None,
+            viewpoints: Vec::new(),
         }
     }
     pub fn request_open(&mut self, path: String) {
@@ -180,6 +195,21 @@ impl SceneApp {
     fn poll(&mut self) {
         for done in self.jobs.poll() {
             match done.result {
+                Ok(Done::SelectionLinks { key, links }) => {
+                    if self.current_selection_key().as_ref() == Some(&key) {
+                        if key.1.is_some() {
+                            self.state.selected_resource =
+                                links.resource_guids.first().and_then(|guid| self.model.as_ref()?.scene.resources.iter().position(|r| &r.guid == guid));
+                            self.changed();
+                        }
+                        self.selection_links = links;
+                    }
+                }
+                Ok(Done::Viewpoints(book)) => {
+                    if self.model.as_ref().is_some_and(|m| m.scene.id == book.scene_id) {
+                        self.viewpoints = book.views;
+                    }
+                }
                 Ok(Done::Chosen(Some(path))) => {
                     self.path = path;
                     self.open();
@@ -770,7 +800,9 @@ impl SceneApp {
                 self.size = desired;
                 self.changed();
             }
-            if response.dragged() {
+            let cube = self.view_cube(ui, rect);
+            let over_cube = ui.input(|i| i.pointer.hover_pos().is_some_and(|p| cube.is_some_and(|r| r.contains(p))));
+            if response.dragged() && !over_cube {
                 let delta = ui.input(|i| i.pointer.delta());
                 if ui.input(|i| i.modifiers.shift || i.pointer.secondary_down()) {
                     self.state.camera.pan([delta.x, delta.y], rect.height());
@@ -779,7 +811,7 @@ impl SceneApp {
                 }
                 self.changed();
             }
-            if response.hovered() {
+            if response.hovered() && !over_cube {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll != 0. {
                     self.state.camera.zoom(scroll);
@@ -787,11 +819,17 @@ impl SceneApp {
                 }
             }
             if response.clicked()
+                && !over_cube
                 && let Some(p) = response.interact_pointer_pos()
             {
                 self.pick([f64::from((p.x - rect.left()) / rect.width() * 2. - 1.), f64::from(1. - (p.y - rect.top()) / rect.height() * 2.)], aspect);
             }
         });
+        if !self.jobs.busy() && self.model.as_ref().is_some_and(|m| self.viewpoints_scene.as_deref() != Some(m.scene.id.as_str())) {
+            self.viewpoints.clear();
+            self.viewpoints_job(None, None);
+        }
+        self.update_selection_links();
         let source_tasks = self.model.as_ref().is_some_and(|m| m.metadata.get("tasks").is_some());
         if (self.state.project.mode != project_panel::Mode::Model || (planning && self.state.planning.show_schedule && source_tasks))
             && !self.jobs.busy()

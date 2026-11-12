@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scene viewpoints version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "scene_id",
+    "views"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "views": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "camera"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "Engine also enforces 160 UTF-8 bytes, nonblank text and no control characters; names must be unique."
+          },
+          "camera": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "target",
+              "yaw",
+              "pitch",
+              "distance",
+              "y_up"
+            ],
+            "properties": {
+              "target": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number",
+                  "minimum": -1e+18,
+                  "maximum": 1e+18
+                }
+              },
+              "yaw": {
+                "type": "number",
+                "minimum": -1000000.0,
+                "maximum": 1000000.0
+              },
+              "pitch": {
+                "type": "number",
+                "minimum": -1.5707963267948966,
+                "maximum": 1.5707963267948966
+              },
+              "distance": {
+                "type": "number",
+                "minimum": 1e-06,
+                "maximum": 100000000000000.0
+              },
+              "y_up": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

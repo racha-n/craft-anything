@@ -1,6 +1,6 @@
 //! Local metadata-only desktop verification, without source-application or geometry access.
 #![forbid(unsafe_code)]
-use craft_anything_engine::{Engine, Session, Settings, tools::scene_project_tools::LatestMetadataFrame};
+use craft_anything_engine::{Engine, Session, tools::scene_project_tools::LatestMetadataFrame};
 use craft_anything_ui_egui::scene_viewer::SceneApp;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::{
@@ -10,15 +10,20 @@ use std::{
 };
 fn snapshot(path: String, output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
-    let engine = Arc::new(Engine::new(Session::new(Settings { deep_mode: true, first_run_done: true, ..Default::default() })));
+    let mut session = Session::isolated(&output.join("isolated-config"));
+    session.settings.deep_mode = true;
+    session.settings.first_run_done = true;
+    let engine = Arc::new(Engine::new(session));
     let shared = engine.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).wgpu().build_eframe(move |cc| {
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         craft_anything_ui_egui::CraftApp::setup_context(&cc.egui_ctx);
         SceneApp::with_engine(shared, cc.wgpu_render_state.clone(), String::new())
     });
     h.state_mut().path = path;
+    h.state_mut().state.planning.tab = craft_anything_ui_egui::scene_viewer::planning::Tab::File;
     h.step();
-    h.get_by_label("Open schedule/costs only").click();
+    h.get_by_label("Schedule only").click();
     let start = Instant::now();
     let mut ready = 0;
     loop {
@@ -41,7 +46,7 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
     }
     h.render()?.save(output.join("metadata-4d.png")).map_err(|e| e.to_string())?;
     h.get_by_label("5D").click();
-    h.step();
+    h.run_steps(3);
     h.render()?.save(output.join("metadata-5d.png")).map_err(|e| e.to_string())?;
     let latest = engine.session().ext.get::<LatestMetadataFrame>().ok_or("Metadata result disappeared")?;
     std::fs::write(output.join("metadata-frame.json"), serde_json::to_vec_pretty(latest.frame.as_ref()).map_err(|e| e.to_string())?)

@@ -46,3 +46,19 @@ fn planning_workspace_remains_drawable_in_a_narrow_window() {
     assert!(viewport.width() > 200. && viewport.height() > 100., "{viewport:?}");
     assert!(viewport.right() <= 810., "viewport overflows the narrow window: {viewport:?}");
 }
+#[test]
+fn orientation_cube_click_changes_only_camera_direction() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).build_eframe(|cc| {
+        CraftApp::setup_context(&cc.egui_ctx);
+        SceneApp::with_engine(Arc::new(Engine::new(testing::session())), None, String::new())
+    });
+    h.run_steps(3);
+    let before = h.state().state.camera.clone();
+    h.get_by_label("View cube surface").click();
+    h.run_steps(3);
+    let after = &h.state().state.camera;
+    assert!((before.yaw - after.yaw).abs() > 0.01 || (before.pitch - after.pitch).abs() > 0.01);
+    assert_eq!(before.target, after.target);
+    assert_eq!(before.distance, after.distance);
+    assert!(h.state().state.selected_instance.is_none());
+}

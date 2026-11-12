@@ -1091,3 +1091,12 @@ controls showed an outer group overriding an inner group and a leaf while both
 retained their original RGB bytes. Check hierarchy precedence independently, and
 include an unrelated object readback to exclude a colour dialog retaining its last
 custom value. Do not replace that evidence with a nearest-node or leaf-wins guess.
+
+**Freeze shared types before a proof build.** Mutating an engine result type while a
+long build is compiling its UI consumer can mix old metadata with new source. Finish
+edits first and retain source hashes for the validation run. On Windows, stale
+incremental test objects can also produce LNK2001/LNK2019 references to anonymous LLVM
+symbols. Find the owning object directory in the error, stop its completed/failed
+build, and quarantine only that crate's test incremental cache and test fingerprint.
+Preserve working executables and other caches, then rebuild and rerun the failed tests.
+Never treat a linker failure as a passing test or disable a regression to get past it.

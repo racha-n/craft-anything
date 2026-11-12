@@ -18,6 +18,17 @@ listed in [planning-workspace.md](planning-workspace.md). The source project rem
 read only. Rendering and interaction checks are recorded in the local interface
 delivery; this does not close the broader project-format/native-parity work.
 
+The planning view also offers an interactive world-axis cube, persistent named camera
+viewpoints in a versioned scene-bound sidecar, task outline folding, Gantt time zoom/pan
+and direct assignment links between tasks, resources and picked objects. Source joins
+run on background engine jobs. An absent native display ID remains unresolved; the
+schedule uses a short source GUID as an explicit fallback. Hardware-GPU checks exercised
+these controls on two admitted source projects, including exact saved-camera restoration;
+metadata-only schedule/cost viewing was checked separately. Source editing and full native
+visual/engineering parity remain outside the admitted scope.
+
+Validation of the combined baseline and navigation follow-up passed 2,949 distinct tests (19 intentionally ignored cases are recorded separately), including all 249 integration harnesses and five explicitly enabled GPU tests. Shared batch anchors were counted once. All-target clippy, formatting, layering, locks, tool registration, secret scanning and L0-L2 WebAssembly checks passed. The admitted fixture corpus was revalidated in 220 runs with no regressions using the retained hash-verified reader helper; that is separate from the newly built UI and engine tests. Unsupported layouts remain explicit rejections.
+
 ### Experimental project and scene viewer (R3.14)
 
 The desktop Project viewer opens the admitted 6.5.5.28 `.sp` layout directly or a

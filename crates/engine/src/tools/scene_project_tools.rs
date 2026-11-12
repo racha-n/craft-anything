@@ -87,8 +87,58 @@ struct Evaluate {
     #[serde(default = "page_size")]
     limit: usize,
 }
+#[derive(Debug, Clone, Default, serde::Serialize, Deserialize)]
+pub struct SourceSelectionLinks {
+    pub scene_id: String,
+    pub task_guids: Vec<String>,
+    pub resource_guids: Vec<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SelectionLinks {
+    scene_id: String,
+    task_guid: Option<String>,
+    #[serde(default)]
+    resource_guids: Vec<String>,
+}
+fn selection_links(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: SelectionLinks = parse_params(params.clone())?;
+    if p.resource_guids.len() > 1024 || p.resource_guids.iter().any(|v| v.len() > 256) || p.task_guid.as_ref().is_some_and(|v| v.len() > 256) {
+        return Err(ToolError::invalid("Selection joins accept at most 1024 resource identifiers of 256 bytes each."));
+    }
+    let loaded = ctx.session.ext.get::<LoadedScene>().ok_or_else(|| ToolError::invalid("Open a project scene first."))?;
+    if p.scene_id != loaded.scene.id {
+        return Err(ToolError::invalid("Selection belongs to a different scene."));
+    }
+    let (source, model) = model(ctx, None)?;
+    let resources = p.resource_guids.into_iter().collect::<std::collections::BTreeSet<_>>();
+    let result = json!({"scene_id":p.scene_id,"task_guids":model.resource_task_guids(&resources),
+        "resource_guids":p.task_guid.as_deref().map(|id|model.task_resource_guids(id)).unwrap_or_default()});
+    let ev = builder(ctx, "formats_project_selection_links", source.subject, params)
+        .summary("Direct source task/resource assignment links")
+        .confidence(Confidence::Derived)
+        .result(result)
+        .limitation(Limitation::new(
+            "direct_assignments",
+            "Links use stored assignments only; resource ancestry is not inferred and missing display IDs remain unknown.",
+        ))
+        .target_content(true)
+        .build()?;
+    Ok(ToolOutput::evidence(ev))
+}
 pub fn specs() -> Vec<ToolSpec> {
     vec![
+        spec(
+            "formats_project_selection_links",
+            "Link project selections",
+            "Join source task and resource GUIDs using retained direct assignments, with current scene identity validation.",
+            "Find resources assigned to a task or tasks assigned to selected model resources.",
+            Toolset::Formats,
+            Effects::EVIDENCE.union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<SelectionLinks>,
+            selection_links,
+        ),
         spec(
             "formats_project_tasks_list",
             "List project tasks",
@@ -295,6 +345,36 @@ mod tests {
             raw.extend(&compressed);
         }
         raw
+    }
+    #[test]
+    fn selection_links_use_direct_assignments_and_reject_other_scene_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        for ((name, _), bytes) in craft_anything_formats::scene_bundle::MEMBERS.iter().zip(craft_anything_testkit::scene_bundle::fixture()) {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let engine = Engine::new(crate::testing::session());
+        engine.call("formats_scene_bundle_open", json!({"path":dir.path().join("scene.json")}), CallOptions::new(Caller::Cli)).unwrap();
+        let id = {
+            let mut session = engine.session();
+            let source = session.ext.get::<LoadedScene>().unwrap();
+            let metadata = json!({"schema_version":4,"tasks":[{"guid":"task-a","name":"Task A","planned_start_wallclock_scalar":100,"duration_storage_scalar":20,"status_storage_value":2,
+                "assignments":[{"resource_guid":"part","profile_guid":"profile","planned_units":1.}]}],"resources":[],"definition_storage":{}});
+            let id = source.scene.id.clone();
+            session.ext.insert(Arc::new(LoadedScene {
+                scene: source.scene.clone(),
+                manifest: source.manifest.clone(),
+                subject: source.subject.clone(),
+                metadata: Arc::new(metadata),
+            }));
+            id
+        };
+        let output = engine
+            .call("formats_project_selection_links", json!({"scene_id":id,"task_guid":"task-a","resource_guids":["part"]}), CallOptions::new(Caller::Cli))
+            .unwrap()
+            .to_json();
+        assert_eq!(output["result"]["resource_guids"], json!(["part"]));
+        assert_eq!(output["result"]["task_guids"], json!(["task-a"]));
+        assert!(engine.call("formats_project_selection_links", json!({"scene_id":"stale"}), CallOptions::new(Caller::Cli)).is_err());
     }
     #[test]
     fn explicit_metadata_path_works_without_a_scene() {

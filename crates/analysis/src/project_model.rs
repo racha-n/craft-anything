@@ -814,6 +814,18 @@ impl ProjectModel {
         effect.source_tasks = sources;
         Ok(Some(effect))
     }
+    /// Source assignment joins for read-only cross-selection; no hierarchy inference.
+    pub fn task_resource_guids(&self, task_guid: &str) -> Vec<String> {
+        self.prepared
+            .iter()
+            .find(|t| t.stored.guid == task_guid)
+            .map(|t| t.stored.assignments.iter().map(|a| a.resource_guid.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
+            .unwrap_or_default()
+    }
+    /// Task identities assigned directly to any requested source resource.
+    pub fn resource_task_guids(&self, resource_guids: &std::collections::BTreeSet<String>) -> Vec<String> {
+        self.prepared.iter().filter(|t| t.stored.assignments.iter().any(|a| resource_guids.contains(&a.resource_guid))).map(|t| t.stored.guid.clone()).collect()
+    }
     pub fn page_tasks(&self, offset: usize, limit: usize) -> Page<TaskView> {
         page(&self.tasks, offset, limit)
     }
@@ -1291,6 +1303,20 @@ mod tests {
     }
     fn metadata() -> Value {
         json!({"schema_version":4,"tasks":[{"guid":"task-a","name":"Assembly","planned_start_wallclock_scalar":100,"duration_storage_scalar":20,"status_storage_value":2,"date_storage_windows":[200,999,230,UNSET],"assignments":[]}],"resources":[],"definition_storage":{}})
+    }
+    #[test]
+    fn direct_selection_links_deduplicate_resources_and_keep_native_ids_unknown() {
+        let mut data = metadata();
+        data["tasks"][0]["assignments"] = json!([
+            {"resource_guid":"part","profile_guid":"profile","planned_units":1.},
+            {"resource_guid":"part","profile_guid":"profile","planned_units":2.}
+        ]);
+        let model = ProjectModel::from_metadata(&data).unwrap();
+        assert_eq!(model.task_resource_guids("task-a"), vec!["part"]);
+        assert_eq!(model.resource_task_guids(&std::collections::BTreeSet::from(["part".to_owned()])), vec!["task-a"]);
+        assert!(model.task_resource_guids("missing").is_empty());
+        assert!(model.resource_task_guids(&std::collections::BTreeSet::from(["parent".to_owned()])).is_empty());
+        assert!(model.tasks[0].display_id.is_empty());
     }
     #[test]
     fn missing_calendars_preserves_inventory_and_best_dates() {

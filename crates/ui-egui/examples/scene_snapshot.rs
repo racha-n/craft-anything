@@ -43,14 +43,48 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
             .cloned()
             .ok_or_else(|| "A hardware GPU is required for this large-scene verifier".into())
     }));
+    let config = output.join("isolated-config");
     let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).wgpu_setup(eframe::egui_wgpu::WgpuSetup::CreateNew(setup)).build_eframe(move |cc| {
         if let Some(g) = &cc.wgpu_render_state {
             eprintln!("Graphics adapter: {:?}", g.adapter.get_info());
         }
-        SceneApp::new(cc, path)
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+        craft_anything_ui_egui::CraftApp::setup_context(&cc.egui_ctx);
+        let mut session = craft_anything_engine::Session::isolated(&config);
+        session.settings.deep_mode = true;
+        SceneApp::with_engine(std::sync::Arc::new(craft_anything_engine::Engine::new(session)), cc.wgpu_render_state.clone(), path)
     });
     settle(&mut h)?;
     h.render()?.save(output.join("scene-fit.png")).map_err(|e| e.to_string())?;
+    // Verify the actual sidecar controls and camera restoration with isolated settings.
+    let saved = serde_json::to_value(&h.state().state.camera).map_err(|e| e.to_string())?;
+    h.get_by_label("Saved viewpoints").click();
+    h.run_steps(2);
+    h.state_mut().state.planning.viewpoint_name = "QA Overview".into();
+    h.step();
+    h.get_by_label("Save current view").click();
+    settle(&mut h)?;
+    h.state_mut().state.camera.orbit([50., 20.]);
+    h.state_mut().changed();
+    settle(&mut h)?;
+    h.get_by_label("Saved viewpoints").click();
+    h.run_steps(2);
+    h.get_by_label("QA Overview").click();
+    settle(&mut h)?;
+    if serde_json::to_value(&h.state().state.camera).map_err(|e| e.to_string())? != saved {
+        return Err("Saved viewpoint did not restore the exact camera".into());
+    }
+    h.render()?.save(output.join("viewpoint-restored.png")).map_err(|e| e.to_string())?;
+    h.get_by_label("View cube surface").click();
+    settle(&mut h)?;
+    if serde_json::to_value(&h.state().state.camera).map_err(|e| e.to_string())? == saved {
+        return Err("Orientation cube did not change camera direction".into());
+    }
+    h.render()?.save(output.join("view-cube.png")).map_err(|e| e.to_string())?;
+    h.state_mut().state.camera = serde_json::from_value(saved).map_err(|e| e.to_string())?;
+    h.state_mut().changed();
+    settle(&mut h)?;
+
     let model = h.state().model.clone().ok_or("No scene loaded")?;
     let scene = &model.scene;
     if h.state().state.planning.enabled
@@ -64,6 +98,31 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         }
         h.render()?.save(output.join("planning-task-properties.png")).map_err(|e| e.to_string())?;
         h.state_mut().state.planning.selected_task = None;
+    }
+    if model.metadata.get("tasks").is_some() {
+        h.get_by_label("Collapse all").click();
+        h.run_steps(2);
+        if model.metadata["tasks"].as_array().is_some_and(|tasks| tasks.iter().any(|t| t["parent_guid"].is_string()))
+            && h.state().state.planning.collapsed_tasks.is_empty()
+        {
+            return Err("Hierarchy collapse did not change outline state".into());
+        }
+        h.render()?.save(output.join("gantt-collapsed.png")).map_err(|e| e.to_string())?;
+        h.get_by_label("Expand all").click();
+        h.run_steps(2);
+        if !h.state().state.planning.collapsed_tasks.is_empty() {
+            return Err("Expand all retained collapsed tasks".into());
+        }
+        h.get_by_label("Zoom time +").click();
+        h.run_steps(2);
+        if h.state().state.planning.gantt_zoom != 2. {
+            return Err("Gantt time zoom did not change".into());
+        }
+        h.get_by_label("Later").click();
+        h.run_steps(2);
+        h.render()?.save(output.join("gantt-zoomed.png")).map_err(|e| e.to_string())?;
+        h.get_by_label("Fit timeline").click();
+        h.run_steps(2);
     }
     let initial_draw = h.state().draw_stats().map(|(s, ms)| serde_json::json!({"draw":s,"elapsed_ms":ms}));
     if h.state().state.planning.enabled {
@@ -213,7 +272,7 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         settle(&mut h)?;
         h.render()?.save(output.join("project-source-diffuse.png")).map_err(|e| e.to_string())?;
     }
-    let report = serde_json::json!({"schema_version":1,"scene_id":scene.id,"instances":scene.instances.len(),"definitions":scene.meshes.len(),"vertices":scene.positions.len(),"triangles_in_definitions":scene.triangles,"resources":scene.resources.len(),"initial_draw":initial_draw,"focused_draw":focused_draw,"source_diffuse_candidates":scene.source_colors.len(),"selected_instance":h.state().state.selected_instance,"isolate_instances":h.state().state.visibility.isolate_instances,"checks":["source or bundle load","GPU render","ray surface pick","Hide UI action","Show all UI action","Isolate UI action","Fit selection UI action","camera orbit pan zoom","Resource tree selection and visibility","focused full-scene frustum culling","project schedule and costs when source tasks are present"],"units_verified":false,"axes_verified":false,"materials_verified":false,"native_visual_parity_verified":false});
+    let report = serde_json::json!({"schema_version":1,"scene_id":scene.id,"instances":scene.instances.len(),"definitions":scene.meshes.len(),"vertices":scene.positions.len(),"triangles_in_definitions":scene.triangles,"resources":scene.resources.len(),"initial_draw":initial_draw,"focused_draw":focused_draw,"source_diffuse_candidates":scene.source_colors.len(),"selected_instance":h.state().state.selected_instance,"isolate_instances":h.state().state.visibility.isolate_instances,"checks":["source or bundle load","GPU render","saved viewpoint UI persistence and restoration","orientation cube click","Gantt collapse expand and time navigation","ray surface pick","Hide UI action","Show all UI action","Isolate UI action","Fit selection UI action","camera orbit pan zoom","Resource tree selection and visibility","focused full-scene frustum culling","project schedule and costs when source tasks are present"],"units_verified":false,"axes_verified":false,"materials_verified":false,"native_visual_parity_verified":false});
     let mut report = report;
     report["object_colours"] = serde_json::json!({"instances":scene.object_colors.len(),"policy":craft_anything_formats::scene_bundle::OBJECT_COLOR_POLICY});
     report["project_draws"] = serde_json::json!(project_draws);

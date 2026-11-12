@@ -16,18 +16,24 @@ impl Default for Camera {
     }
 }
 impl Camera {
+    /// Orient to a world-axis face while retaining the target and zoom.
+    pub fn orient(&mut self, normal: Point) {
+        let (horizontal, vertical) = if self.y_up { ([normal[0], normal[2]], normal[1]) } else { ([normal[0], normal[1]], normal[2]) };
+        self.yaw = horizontal[1].atan2(horizontal[0]);
+        self.pitch = vertical.atan2(horizontal[0].hypot(horizontal[1]));
+    }
     pub fn fit(&mut self, bounds: Bounds) {
         self.target = bounds.center();
         self.distance = (bounds.radius() * 3.5).clamp(1e-6, 1e14);
     }
     pub fn basis(&self) -> (Point, Point, Point, Point) {
         let (s, c) = self.yaw.sin_cos();
-        let (p, q) = self.pitch.clamp(-1.5, 1.5).sin_cos();
+        let (p, q) = self.pitch.clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2).sin_cos();
         let offset = if self.y_up { [c * q, p, s * q] } else { [c * q, s * q, p] };
         let eye = math::add(self.target, math::scale(offset, self.distance));
         let forward = math::scale(offset, -1.);
-        let up = if self.y_up { [0., 1., 0.] } else { [0., 0., 1.] };
-        let right = math::normalized(math::cross(forward, up)).unwrap_or([1., 0., 0.]);
+        // Analytic tangent stays defined at the exact top and bottom faces.
+        let right = if self.y_up { [s, 0., -c] } else { [-s, c, 0.] };
         let up = math::cross(right, forward);
         (eye, forward, right, up)
     }
@@ -91,6 +97,19 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cube_faces_keep_target_distance_and_handle_both_up_axes() {
+        for y_up in [false, true] {
+            let mut c = Camera { y_up, ..Default::default() };
+            for normal in [[1., 0., 0.], [-1., 0., 0.], [0., 1., 0.], [0., -1., 0.], [0., 0., 1.], [0., 0., -1.]] {
+                let before = (c.target, c.distance);
+                c.orient(normal);
+                let (_, forward, _, _) = c.basis();
+                assert!(math::dot(math::scale(forward, -1.), normal) > 0.999999);
+                assert_eq!(before, (c.target, c.distance));
+            }
+        }
+    }
     #[test]
     fn center_ray_and_rebased_projection_agree() {
         for y_up in [false, true] {
