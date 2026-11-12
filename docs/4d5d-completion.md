@@ -5,7 +5,7 @@ that reopen in the source application. Existing viewer/export completion does no
 
 | Gate | Required behavior | Current evidence |
 |---|---|---|
-| Native persistence | New SP output, source hash precondition, preserved unknown sections, independent native open/save/reopen of intended edits | Reader offsets known; writer and native reopen not certified |
+| Native persistence | New SP output, source hash precondition, preserved unknown sections, independent native open/save/reopen of intended edits | Scoped scalar controls passed on native 6.5.5.28; general native Save remains unadmitted |
 | 4D authoring | Task/hierarchy/resource assignments, calendars, dependency types/lags, rescheduling, CPM and baselines | Reader/calendar/preview available; editing and scheduling absent; link semantics need independent controls |
 | 5D authoring | Source-bound quantities, resource rates, budgets/progress/expenses, sampled cost curves and persistence | Bounded source evaluators available; editing/charts and additional kinds/units/currencies remain open |
 | Validation | Supported-case matrix, hostile-input tests, source guards, UI/CLI parity, native round trips and honest disabled controls | Prior viewer matrix exists; authoring gates remain open |
@@ -20,8 +20,10 @@ all opaque streams and recording each before/after byte range. Keep native persi
 admission distinct from candidate generation. Later phases must rebuild derived model caches
 from edited source data and retain explicit source/plan identity through UI, CLI and MCP.
 
-The current Windows Computer Use bridge reports native-pipe unavailable. Native UI verification
-is outstanding until the supported connection is restored; static/reader checks cannot close it.
+The Windows Computer Use bridge was unavailable at the start of the study. The user
+explicitly authorized an alternative native automation channel on isolated study copies.
+Native acceptance still requires independently observed values and Save/reopen evidence;
+static/reader checks cannot close that gate.
 
 ## Experimental scalar candidate contract
 
@@ -101,15 +103,48 @@ they do not establish full native edit equivalence. An independent native UI qua
 from 5 to 7.5 also changes the planned utilization window from 166.66666666666666 to 250.
 The quantity-only candidate retains the old window even after native save/reopen. Its decoded
 Tasks payload differs from the native-edited control only at that rate window. This is a failed
-authoring-equivalence check, retained as evidence. Coordinated fields require independent
-native comparison before any friendly quantity/duration edit or native Save control is admitted.
+authoring-equivalence check, retained as evidence. The coordinated comparisons below close that specific storage mismatch for the observed
+fixture. They do not admit an automatic rate policy, other assignment settings, friendly
+quantity/duration editing or a general native Save control.
 
 ## Checkpoint validation
 
-Work is stopped pending explicit continuation. The earlier source freeze passed 1,772
+At the prior checkpoint, work was stopped pending explicit continuation. That source freeze passed 1,772
 library tests (10 ignored), all-target clippy, application builds, layers, locks, wasm,
 tool documentation, secrets, doctests and formatting. The subsequent coordinated
-quantity/utilization regression passed, but the latest rate-field changes still require
-a fresh full validation and paired-field native Save/reopen controls. Build artifacts
-were intentionally cleaned after stopping. This checkpoint does not close the roadmap
-items or authorize native Save controls.
+quantity/utilization regression passed. Build artifacts were intentionally cleaned after
+stopping. The subsequent continuation and fresh validation are recorded below. Neither
+checkpoint authorizes a general native Save control.
+
+## Coordinated native controls (2026-11-13)
+
+Fresh CLI output was compared with expectations frozen from independent native UI edits
+before generation. Both paired candidates retained all 47 non-Tasks stored sections and
+matched the independent control's entire decoded Tasks stream, not only displayed totals.
+Each candidate was opened, saved to a new native file, unloaded and reopened. All observed
+General and assignment property values matched before/after; the native-saved decoded
+Tasks and typed task page also matched. Geometry inventories and Entities, IncludeLibrary,
+Resources, Calendars and Use Profiles remained unchanged. Focused screenshots after reopen
+showed the retained geometry.
+
+| Transaction | Native values after Save/reopen | Independent native editing control |
+|---|---|---|
+| Planned quantity 5 to 7.5 plus raw utilization 166.66666666666666 to 250 | Units 7.50, rate 2.50 u/d, duration 3 days | Decoded Tasks byte-identical |
+| Duration 86400 to 115200 plus raw utilization 166.66666666666666 to 125 | Duration 4 days, units 5.00, rate 1.25 u/d | Decoded Tasks byte-identical |
+
+These are observations for one Planned-status Work task, Fixed duration and one Linear
+Material assignment with Fixed Units true and Driving false, on native build 6.5.5.28.
+No nominal-day formula, multi-assignment behavior, started/finished status, dependency
+rescheduling, other resource kinds or currency conversion is certified by this matrix.
+The candidate receipt deliberately retains its storage-only contract and does not mutate
+its native-verification flag after an external audit.
+
+A separate quantity-only Material control also retained the native budget 551.25 for
+7.5 units at its known PerUnit price 73.50; the current reader returned 55125 minor units
+before and after native Save/reopen. That is cost/persistence evidence, not full editing
+equivalence: its utilization rate remained 1.67 u/d.
+
+The latest source passed 2,724 tests across 248 unit, integration and doctest harnesses
+for formats, analysis and engine, with 19 ignored and no failures. All-target clippy,
+layers, locks, secrets, tool documentation, wasm and formatting also passed on the same frozen source. The lean validation cache disables
+incremental compilation and debug symbols; no source/compiler optimization policy changed.

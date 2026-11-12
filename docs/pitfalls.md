@@ -1129,3 +1129,10 @@ before dropping the frame output. Async job tests must mark the worker visible w
 with `Jobs::busy`, which deliberately excludes hidden work.
 `egui_kittest::Node::type_text` queues text events; focus the text field and step first,
 then verify its value before waiting for an enabled submit button.
+
+
+**A small native window can hide a planning pane.** Resizing the native planning app
+to a fixed 1,000-pixel height collapsed its Gantt area without closing the project or
+changing task data. Check the observed layout and available monitor work area before
+treating a missing pane as an import failure. Fit the owned window within that work
+area, verify the expected pane is present, and retain the failed attempt separately.

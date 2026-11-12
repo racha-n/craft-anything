@@ -14,9 +14,13 @@ writer is under validation; it preserves untouched section payloads and emits a 
 byte-change receipt. It cannot certify native reopen or recalculate dependent schedule dates.
 See [the acceptance gates and candidate contract](4d5d-completion.md). Native Save and full
 4D/5D authoring remain disabled. Isolated native persistence controls passed, but independent
-native UI editing exposed utilization-rate coordination gaps. Paired-field native acceptance
-and full validation of the latest rate changes remain outstanding; this is a checkpoint,
-not a release-ready authoring implementation.
+native UI editing exposed utilization-rate coordination gaps. Paired quantity/rate and
+duration/rate candidates subsequently matched independent native UI controls and survived
+native Save/reopen for the observed Planned singleton. Fresh formats/analysis/engine unit,
+integration and doctests passed (2,724 passed, 19 ignored), together with all-target clippy,
+layers, locks, secrets, tools, wasm and formatting.
+Broader scheduling and assignment settings remain unadmitted; this is not release-ready
+authoring.
 
 ### Readable CSV dates and reusable templates (R3.14)
 
