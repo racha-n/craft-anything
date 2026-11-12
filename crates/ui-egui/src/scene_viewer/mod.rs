@@ -7,6 +7,7 @@ mod navigation;
 pub mod planning;
 pub mod presentation;
 pub mod project_panel;
+mod report_templates;
 use crate::{
     jobs::Jobs,
     theme::{self, ThemeKind, Tokens},

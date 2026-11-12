@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reusable CSV report template version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "tables",
+    "readable_dates"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Nonblank visible name; engine additionally caps UTF-8 encoding at 120 bytes and rejects controls."
+    },
+    "tables": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "tasks",
+          "resources",
+          "costs",
+          "actual_expenses",
+          "phases"
+        ]
+      }
+    },
+    "readable_dates": {
+      "type": "boolean"
+    }
+  }
+}

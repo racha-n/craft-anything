@@ -128,3 +128,40 @@ fn mp4_preflight_errors_do_not_create_outputs() {
     assert!(e.call("formats_scene_mp4_export", p, CallOptions::new(Caller::Cli)).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"preserve");
 }
+
+#[test]
+fn report_template_dates_selection_and_file_reuse_preserve_raw_snapshot() {
+    let (d, e, id) = setup();
+    let first = d.path().join("schedule-report");
+    let p = json!({"scene_id":id,"output_dir":first,"focus":100,"template":{"version":1,"name":"Schedule review","tables":["tasks","phases"],"readable_dates":true}});
+    let result = call(&e, "formats_project_report_export", p);
+    let m = &result["result"]["manifest"];
+    assert_eq!(m["version"], 3);
+    assert_eq!(m["source_report_version"], 1);
+    assert_eq!(m["geometry_coverage"], "loaded_scene");
+    assert_eq!(m["tables"].as_array().unwrap().len(), 2);
+    assert!(!first.join("costs.csv").exists());
+    let csv = std::fs::read_to_string(first.join("tasks.csv")).unwrap();
+    assert!(csv.contains("planned_start_display"));
+    assert!(csv.contains("1970-01-01 00:01:40"));
+    assert!(csv.contains("'=Work"));
+    let raw: Value = serde_json::from_slice(&std::fs::read(first.join("snapshot.json")).unwrap()).unwrap();
+    assert_eq!(raw["tasks"][0]["planned_start"], 100);
+    assert!(raw["tasks"][0].get("planned_start_display").is_none());
+    assert!(!raw["frame"]["costs"]["lines"].as_array().unwrap().is_empty());
+    let second = d.path().join("reused");
+    call(&e, "formats_project_report_export", json!({"scene_id":id,"output_dir":second,"focus":100,"template_path":first.join("template.json")}));
+    for name in ["tasks.csv", "phases.csv", "snapshot.json", "template.json", "manifest.json"] {
+        assert_eq!(std::fs::read(first.join(name)).unwrap(), std::fs::read(second.join(name)).unwrap());
+    }
+    let invalid = d.path().join("invalid-template.json");
+    std::fs::write(&invalid, b"{\"version\":99,\"name\":\"Future\",\"tables\":[\"tasks\"],\"readable_dates\":true}").unwrap();
+    let saved = std::fs::read(&invalid).unwrap();
+    let out = d.path().join("invalid-output");
+    assert!(
+        e.call("formats_project_report_export", json!({"scene_id":id,"output_dir":out,"focus":100,"template_path":invalid}), CallOptions::new(Caller::Cli))
+            .is_err()
+    );
+    assert!(!out.exists());
+    assert_eq!(saved, std::fs::read(invalid).unwrap());
+}

@@ -11,6 +11,32 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+fn fill(h: &mut Harness<SceneApp>, label: &str, value: &str) -> Result<(), String> {
+    h.get_all_by_label(label).last().ok_or("Missing report text field")?.focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_all_by_label(label).last().ok_or("Missing report text field")?.type_text(value);
+    h.run_steps(2);
+    Ok(())
+}
+fn export(h: &mut Harness<SceneApp>, output: &Path) -> Result<(), String> {
+    fill(h, "Metadata report folder", &output.to_string_lossy())?;
+    if h.get_by_label("Metadata report folder").value().as_deref() != Some(output.to_string_lossy().as_ref()) {
+        return Err("Report destination was not replaced".into());
+    }
+    h.get_by_label("Export metadata CSV").click();
+    let started = Instant::now();
+    while !output.join("manifest.json").exists() {
+        h.step();
+        if started.elapsed() > Duration::from_secs(60) {
+            return Err("Template export did not finish".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.run_steps(12);
+    Ok(())
+}
 fn snapshot(path: String, output: &Path) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
     let mut session = Session::isolated(&output.join("isolated-config"));
@@ -89,7 +115,7 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(report.join("manifest.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let metadata = engine.session().ext.get::<LatestMetadataFrame>().ok_or("Missing metadata frame")?;
-    if manifest["version"] != 2
+    if manifest["version"] != 3
         || !manifest["scene_id"].is_null()
         || manifest["source_sha256"] != metadata.source_sha256
         || manifest["focus"] != metadata.frame.focus
@@ -102,7 +128,7 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
     }
     std::fs::write(
         output.join("metadata-report-verification.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({"version":1,"export_via_ui":true,"no_scene_loaded":true,"source_focus_match":true,"manifest_version":2}))
+        serde_json::to_vec_pretty(&serde_json::json!({"version":1,"export_via_ui":true,"no_scene_loaded":true,"source_focus_match":true,"manifest_version":3}))
             .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -113,6 +139,29 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
     let latest = engine.session().ext.get::<LatestMetadataFrame>().ok_or("Metadata result disappeared")?;
     std::fs::write(output.join("metadata-frame.json"), serde_json::to_vec_pretty(latest.frame.as_ref()).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    h.get_by_label("CSV template selection").click();
+    h.run_steps(2);
+    h.get_by_label("Schedule review").click();
+    h.run_steps(2);
+    let schedule = output.join("schedule-template-report");
+    export(&mut h, &schedule)?;
+    if schedule.join("costs.csv").exists() {
+        return Err("Schedule template unexpectedly exported cost CSV".into());
+    }
+    h.render()?.save(output.join("schedule-template-ui.png")).map_err(|e| e.to_string())?;
+    h.get_by_label("CSV template selection").click();
+    h.run_steps(2);
+    h.get_by_label("Saved template JSON").click();
+    h.run_steps(2);
+    fill(&mut h, "Template JSON path", &schedule.join("template.json").to_string_lossy())?;
+    let reused = output.join("reused-template-report");
+    export(&mut h, &reused)?;
+    for name in ["tasks.csv", "phases.csv", "snapshot.json", "template.json", "manifest.json"] {
+        if std::fs::read(schedule.join(name)).map_err(|e| e.to_string())? != std::fs::read(reused.join(name)).map_err(|e| e.to_string())? {
+            return Err(format!("Reused template differs for {name}"));
+        }
+    }
+    std::fs::write(output.join("template-verification.json"), serde_json::to_vec_pretty(&serde_json::json!({"version":1,"default_readable_all_export":true,"schedule_preset_via_ui":true,"saved_template_reused_via_ui":true,"all_reused_files_byte_identical":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     eprintln!("Metadata UI: verified metadata and CSV export");
     Ok(())
 }

@@ -134,7 +134,13 @@ pub const FUTURE_COMMANDS: &[FutureCommand] = &[
         label: "Cost curves",
         reason: "Planned: chart planned, actual and forecast costs over time.",
     },
-    FutureCommand { tab: Tab::Reports, group: "Reports", icon: "file", label: "Report templates", reason: "Planned: customize reusable report layouts." },
+    FutureCommand {
+        tab: Tab::Reports,
+        group: "Reports",
+        icon: "file",
+        label: "Formatted report layouts",
+        reason: "Planned: page layouts and PDF reports. CSV table/date templates are available.",
+    },
     FutureCommand {
         tab: Tab::Windows,
         group: "Window management",
@@ -374,6 +380,9 @@ impl SceneApp {
                     }
                     if self.state.planning.tab == Tab::Reports {
                         group(ui, "Reports", |ui| {
+                            if command(ui, "file", "Report templates", loaded) {
+                                self.state.presentation.show_reports = true;
+                            }
                             if command(ui, "clipboard-list", "Schedule report", loaded) {
                                 self.state.presentation.show_reports = true;
                             }

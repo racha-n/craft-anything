@@ -110,17 +110,22 @@ Explicit-path reports use version-2 manifest/snapshot schemas with `scene_id: nu
 `geometry_coverage: "not_inspected"`. Their audit contains metadata coverage rather than
 invented geometry/material counts. Loaded-scene reports retain version 1 unchanged.
 These are immutable new outputs; there is no in-place migration of existing reports.
-Readable date columns and reusable report templates remain future work; raw displayed-clock
-scalars are retained without timezone conversion.
+Readable dates and reusable CSV templates are available as an explicit version-3 presentation;
+raw displayed-clock scalars remain unchanged without timezone conversion.
 
 The destination directory must not exist. Files are created without replacement and a valid
 manifest is published last. Cancellation/I/O failure may leave an incomplete directory;
 preserve it and choose a new destination. Consumers must validate the manifest and file
 hashes before treating the folder as complete. Individual CSV files are capped at 32 MiB
-and the structured snapshot at 64 MiB. Report templates and formatted PDF reports remain
-future work.
+and the structured snapshot at 64 MiB. CSV templates are available; formatted PDF reports remain future work.
 
 The version-1 schemas are under docs/schemas: scene-animation-v1.json,
 scene-video-manifest-v1.json, project-report-manifest-v1.json and
 project-report-snapshot-v1.json. Unknown versions require a future explicit migration;
 existing report/video outputs are never updated in place.
+
+## CSV presentation templates
+
+The new UI defaults to readable date columns with reusable table-selection templates.
+Both scene and metadata exports accept template or template_path and produce version-3
+outputs when selected; omitted templates retain v1/v2 behavior. See [report templates](report-templates.md).

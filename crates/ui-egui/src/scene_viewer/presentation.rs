@@ -21,6 +21,7 @@ pub struct State {
     pub mp4: bool,
     pub encoder_path: String,
     pub report_dir: String,
+    pub report_template: super::report_templates::Choice,
     pub show: bool,
     pub show_reports: bool,
     pub show_audit: bool,
@@ -41,6 +42,7 @@ impl Default for State {
             mp4: false,
             encoder_path: String::new(),
             report_dir: String::new(),
+            report_template: super::report_templates::Choice::default(),
             show: false,
             show_reports: false,
             show_audit: false,
@@ -190,7 +192,7 @@ if let Err(e)=a.validate(){ui.small(e);}}
  });
         self.state.presentation.show = show;
         let mut show = self.state.presentation.show_reports;
-        self.presentation_window(ui,"Export schedule and cost reports").open(&mut show).default_width(520.).show(ui.ctx(),|ui|{if self.state.planning.enabled{super::planning::style(ui);}ui.label("Creates a new report folder: tasks, resources, costs, expenses, 4D phases, raw snapshot and manifest.");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.state.presentation.report_dir);if ui.button("Browse report location").clicked(){self.pick_export(false);}});ui.label(format!("Source focus: {}",project_panel::wallclock(self.state.project.focus)));if ui.add_enabled(self.model.is_some()&&!self.jobs.busy()&&!self.state.presentation.report_dir.is_empty(),egui::Button::new("Export CSV reports")).clicked()&&let Some(m)=&self.model{self.presentation_call("formats_project_report_export",json!({"scene_id":m.scene.id,"output_dir":self.state.presentation.report_dir,"focus":self.state.project.focus,"options":self.options(ui)}));}ui.small("Direct budgets, resource forecasts and recorded expenses remain separate. Missing amounts stay empty; formulas in text are guarded. No currency/unit conversion.");});
+        self.presentation_window(ui,"Export schedule and cost reports").open(&mut show).default_width(520.).show(ui.ctx(),|ui|{if self.state.planning.enabled{super::planning::style(ui);}ui.label("Creates a new report folder: tasks, resources, costs, expenses, 4D phases, raw snapshot and manifest.");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.state.presentation.report_dir);if ui.button("Browse report location").clicked(){self.pick_export(false);}});ui.label(format!("Source focus: {}",project_panel::wallclock(self.state.project.focus)));let template_valid=self.state.presentation.report_template.show(ui,!self.jobs.busy());if ui.add_enabled(template_valid&&self.model.is_some()&&!self.jobs.busy()&&!self.state.presentation.report_dir.is_empty(),egui::Button::new("Export CSV reports")).clicked()&&let Some(m)=&self.model{let mut params=json!({"scene_id":m.scene.id,"output_dir":self.state.presentation.report_dir,"focus":self.state.project.focus,"options":self.options(ui)});self.state.presentation.report_template.apply(&mut params);self.presentation_call("formats_project_report_export",params);}ui.small("Direct budgets, resource forecasts and recorded expenses remain separate. Missing amounts stay empty; formulas in text are guarded. No currency/unit conversion.");});
         self.state.presentation.show_reports = show;
         let mut show = self.state.presentation.show_audit;
         self.presentation_window(ui, "Source identity and appearance audit").open(&mut show).default_width(550.).show(ui.ctx(), |ui| {

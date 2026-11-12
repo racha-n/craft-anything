@@ -6,6 +6,34 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Readable CSV dates and reusable templates (R3.14)
+
+Reports and Schedule only offer All tables with dates, Schedule review, Cost review,
+Saved template JSON and Legacy raw CSV. A new headless catalogue lists the three presets;
+both export tools accept an inline version-1 template or an absolute saved-template path.
+Templates select CSV tables and date labels. The full raw model/frame stays in snapshot.json,
+including data omitted from selected CSV files. Original scalar columns remain intact.
+Tasks add four date labels, expenses a date label, and resources rate-date labels aligned
+with their original rates. Gregorian years 1600..9999 format as YYYY-MM-DD HH:MM:SS without
+timezone conversion; nulls stay empty and out-of-range values show Unresolved.
+
+Templated exports use report manifest/snapshot v3, record source scope, selected columns,
+focus/date policy and template hash, and include a reusable template.json. Omitted template
+parameters retain legacy v1/v2 output. Version checks, a 16 KiB template cap, unique table
+selections, output budgets, cancellation and no-clobber publication apply. Existing template
+files are read only. Formatted page/PDF layouts remain visibly disabled.
+
+Latest validation: 1,780 tests passed, 10 library tests intentionally ignored, across all
+five library suites and six relevant integration harnesses with six explicit GPU cases.
+Tests cover epoch/negative/leap/century/extreme dates, template validation, raw retention,
+legacy behavior and saved-template byte identity. Two metadata UI workflows produced six
+reports through preset selection and saved-file reuse; one loaded-scene UI workflow produced
+another report. Independent Python Gregorian dates and CSV parsing verified every emitted
+cell, selected tables, hashes and raw snapshots. Two CLI exports matched validated UI data,
+including a separate cost preset. All 27 schema checks passed across these nine report folders.
+Formatting, all-target clippy, layers, locks, tools and secrets passed; 57 source guards were
+unchanged. The earlier full 250-harness matrix was not repeated. See [template details](report-templates.md).
+
 ### Metadata-only CSV export (R3.14)
 
 Schedule only now offers Export metadata CSV through the new headless
@@ -30,7 +58,7 @@ loaded scene. An independent CSV parser checked every cell, row count, file hash
 source/focus snapshot; both v2 schemas validated on both files. A fresh headless CLI export
 produced all seven files byte-for-byte identical to the matching UI export. Formatting,
 all-target clippy, layers, locks, tools and secrets passed. The earlier 250-harness matrix
-was not repeated. Readable CSV dates and reusable report templates remain future work.
+was not repeated. CSV dates and table templates are available; formatted page/PDF layouts remain future work.
 
 ### Compressed project video (R3.14)
 
@@ -83,7 +111,7 @@ OpenCV decoding verified all three source-time frames, hashes and random seeking
 independent CSV parser verified row counts, file hashes and separate subtotals. Four output
 schemas validated. All-target clippy, formatting, layers, locks, tools and secrets passed.
 Source parser/analysis crates were not changed. See [presentation details](scene-presentation.md).
-Readable CSV date columns and formatted templates remain future work.
+CSV date columns and table templates are available; formatted page/PDF layouts remain future work.
 
 ### Planning workspace for project viewing (R3.14)
 

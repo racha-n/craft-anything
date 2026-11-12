@@ -48,6 +48,7 @@ pub struct MetadataPanel {
     report_jobs: Jobs<ReportDone>,
     report_job: Option<u64>,
     report_dir: String,
+    report_template: super::report_templates::Choice,
     report_status: Option<String>,
 }
 impl MetadataPanel {
@@ -70,6 +71,7 @@ impl MetadataPanel {
             report_jobs: Jobs::default(),
             report_job: None,
             report_dir: String::new(),
+            report_template: super::report_templates::Choice::default(),
             report_status: None,
         }
     }
@@ -236,18 +238,22 @@ impl MetadataPanel {
                 }));
             }
         });
-        let ready = self.latest.is_some() && !self.pending && !self.jobs.busy() && !self.report_jobs.busy() && !self.report_dir.is_empty();
+        let template_valid = self.report_template.show(ui, !self.report_jobs.busy());
+        let ready = template_valid && self.latest.is_some() && !self.pending && !self.jobs.busy() && !self.report_jobs.busy() && !self.report_dir.is_empty();
         if ui.add_enabled(ready, egui::Button::new("Export metadata CSV")).clicked() {
             self.state.playing = false;
             self.report_status = None;
             let generation = self.generation;
             let key = self.key();
             let output = self.report_dir.clone();
+            let template = self.report_template.clone();
             if let Some(source_sha256) = self.source_sha256.clone() {
                 let engine = self.engine.clone();
                 self.report_job = Some(self.report_jobs.spawn("Export metadata-only reports", true, move |job| {
                     let reporter = job.reporter();
-                    engine.call("formats_project_file_report_export", json!({"path":key.path,"output_dir":output,"focus":key.focus,"expected_source_sha256":source_sha256,"best_dates":key.best,"interval_preview":key.preview,"profile_effects":key.effects}), CallOptions::new(Caller::Ui).with_cancel(job.cancel.clone()).with_progress(&reporter)).map_err(|e|e.for_people())?;
+                    let mut params = json!({"path":key.path,"output_dir":output,"focus":key.focus,"expected_source_sha256":source_sha256,"best_dates":key.best,"interval_preview":key.preview,"profile_effects":key.effects});
+                    template.apply(&mut params);
+                    engine.call("formats_project_file_report_export", params, CallOptions::new(Caller::Ui).with_cancel(job.cancel.clone()).with_progress(&reporter)).map_err(|e|e.for_people())?;
                     Ok(ReportDone::Export { generation, key, source_sha256, output })
                 }));
             }

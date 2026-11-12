@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Templated project-report-snapshot",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "focus",
+    "tasks",
+    "resources",
+    "frame",
+    "audit",
+    "geometry_coverage",
+    "source_report_version",
+    "focus_display"
+  ],
+  "properties": {
+    "version": {
+      "const": 3
+    },
+    "scene_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "focus": {
+      "type": "integer"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "frame": {
+      "type": "object"
+    },
+    "audit": {
+      "type": "object"
+    },
+    "geometry_coverage": {
+      "enum": [
+        "loaded_scene",
+        "not_inspected"
+      ]
+    },
+    "source_report_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "focus_display": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "scene_id": {
+          "type": "null"
+        },
+        "geometry_coverage": {
+          "const": "not_inspected"
+        },
+        "source_report_version": {
+          "const": 2
+        }
+      }
+    },
+    {
+      "properties": {
+        "scene_id": {
+          "type": "string"
+        },
+        "geometry_coverage": {
+          "const": "loaded_scene"
+        },
+        "source_report_version": {
+          "const": 1
+        }
+      }
+    }
+  ]
+}

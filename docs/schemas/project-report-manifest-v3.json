@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Templated project-report-manifest",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "focus",
+    "tables",
+    "snapshot_sha256",
+    "totals",
+    "money_policy",
+    "completion_marker",
+    "geometry_coverage",
+    "source_report_version",
+    "focus_display",
+    "template",
+    "template_sha256",
+    "date_display_policy"
+  ],
+  "properties": {
+    "version": {
+      "const": 3
+    },
+    "scene_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "focus": {
+      "type": "integer"
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "rows",
+          "sha256",
+          "columns"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "snapshot_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "totals": {
+      "type": "object"
+    },
+    "money_policy": {
+      "type": "string"
+    },
+    "completion_marker": {
+      "type": "string"
+    },
+    "geometry_coverage": {
+      "enum": [
+        "loaded_scene",
+        "not_inspected"
+      ]
+    },
+    "source_report_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "focus_display": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "template": {
+      "title": "Reusable CSV report template version 1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "name",
+        "tables",
+        "readable_dates"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Nonblank visible name; engine additionally caps UTF-8 encoding at 120 bytes and rejects controls."
+        },
+        "tables": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tasks",
+              "resources",
+              "costs",
+              "actual_expenses",
+              "phases"
+            ]
+          }
+        },
+        "readable_dates": {
+          "type": "boolean"
+        }
+      }
+    },
+    "template_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "date_display_policy": {
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "scene_id": {
+          "type": "null"
+        },
+        "geometry_coverage": {
+          "const": "not_inspected"
+        },
+        "source_report_version": {
+          "const": 2
+        }
+      }
+    },
+    {
+      "properties": {
+        "scene_id": {
+          "type": "string"
+        },
+        "geometry_coverage": {
+          "const": "loaded_scene"
+        },
+        "source_report_version": {
+          "const": 1
+        }
+      }
+    }
+  ]
+}

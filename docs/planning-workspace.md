@@ -37,7 +37,7 @@ otherwise implemented commands and is distinguished from a missing capability.
 | Resources | New resources, assignment editing, resource wizard, appearance-profile editing |
 | 3D | Import/export models, edit transforms and materials |
 | Project Controls | Cost editing, progress entry, time-series cost charts |
-| Reports | Formatted/reusable report templates (CSV reports are available) |
+| Reports | Formatted page/PDF layouts (CSV table/date templates are available) |
 | Windows / Navigator | Docking, named workspaces and saved searches |
 
 These are visible backlog items, not promises that the reader/writer already implements them.
@@ -96,3 +96,7 @@ manifest and decoded-frame checks. AVI remains available. See [video details](sc
 Schedule only has its own Export metadata CSV action. It exports the displayed explicit
 source/focus snapshot without loading drawable geometry or using a retained 3D scene.
 Changed source hashes require a reload; outputs are new source-bound v2 report folders.
+
+Report templates is active for loaded scenes and the same CSV chooser appears in Schedule
+only. Built-in table selections, readable date columns and saved template JSON reuse are
+implemented. Formatted page/PDF layouts remain grey. See [template details](report-templates.md).
