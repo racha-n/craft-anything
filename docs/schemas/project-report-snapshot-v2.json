@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Metadata-only Structured project report snapshot",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "focus",
+    "tasks",
+    "resources",
+    "frame",
+    "audit",
+    "geometry_coverage"
+  ],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "scene_id": {
+      "type": "null"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "focus": {
+      "type": "integer"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "frame": {
+      "type": "object"
+    },
+    "audit": {
+      "type": "object"
+    },
+    "geometry_coverage": {
+      "const": "not_inspected"
+    }
+  }
+}

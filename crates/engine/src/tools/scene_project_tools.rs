@@ -39,10 +39,10 @@ pub struct LatestMetadataFrame {
     pub frame: Arc<Frame>,
     pub model: Arc<ProjectModel>,
 }
-struct ProjectSource {
-    scene_id: Option<String>,
-    source_sha256: String,
-    subject: Subject,
+pub(super) struct ProjectSource {
+    pub scene_id: Option<String>,
+    pub source_sha256: String,
+    pub subject: Subject,
 }
 impl ProjectSource {
     fn identity(&self) -> Value {
@@ -216,6 +216,9 @@ fn model(ctx: &mut Ctx<'_>, path: Option<&str>) -> Result<(ProjectSource, Arc<Pr
     ctx.session.ext.insert(Arc::new(CachedProject { scene_id: source.scene.id.clone(), model: parsed.clone() }));
     Ok((identity, parsed))
 }
+pub(super) fn metadata_model(ctx: &mut Ctx<'_>, path: &str) -> Result<(ProjectSource, Arc<ProjectModel>), ToolError> {
+    model(ctx, Some(path))
+}
 pub(super) fn scene_model(ctx: &mut Ctx<'_>) -> Result<Arc<ProjectModel>, ToolError> {
     model(ctx, None).map(|(_, model)| model)
 }
@@ -309,10 +312,10 @@ fn formats_project_frame_evaluate(ctx: &mut Ctx<'_>, params: Value) -> Result<To
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{CallOptions, Caller, Engine, Session, Settings};
-    fn empty_metadata_project() -> Vec<u8> {
+    pub(crate) fn empty_metadata_project() -> Vec<u8> {
         let mut empty = vec![0; 24];
         empty.extend([0x7a, 0x54, 0xaf, 0x39]);
         empty.extend(0u32.to_le_bytes());
@@ -424,6 +427,18 @@ mod tests {
         let output =
             engine.call("formats_project_frame_evaluate", json!({"path":path,"focus_wallclock":0,"limit":1}), CallOptions::new(Caller::Cli)).unwrap().to_json();
         assert!(output["result"]["scene_id"].is_null());
+        let reports = dir.path().join("metadata-report");
+        let report = engine
+            .call(
+                "formats_project_file_report_export",
+                json!({"path":path,"output_dir":reports,"focus":0,"expected_source_sha256":output["result"]["source"]["source_sha256"]}),
+                CallOptions::new(Caller::Cli),
+            )
+            .unwrap()
+            .to_json();
+        assert!(report["result"]["manifest"]["scene_id"].is_null());
+        let snapshot: Value = serde_json::from_slice(&std::fs::read(reports.join("snapshot.json")).unwrap()).unwrap();
+        assert!(snapshot["resources"].as_array().unwrap().is_empty());
         let session = engine.session();
         assert!(Arc::ptr_eq(&source, &session.ext.get::<LoadedScene>().unwrap()));
         assert!(Arc::ptr_eq(&cached, &session.ext.get::<CachedProject>().unwrap()));

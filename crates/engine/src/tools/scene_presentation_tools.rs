@@ -125,6 +125,30 @@ struct ReportRequest {
     #[serde(default)]
     options: RenderOptions,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FileReportRequest {
+    path: String,
+    output_dir: String,
+    focus: i64,
+    expected_source_sha256: Option<String>,
+    #[serde(default)]
+    best_dates: bool,
+    #[serde(default)]
+    interval_preview: bool,
+    #[serde(default)]
+    profile_effects: bool,
+}
+struct ReportInput {
+    source: scene_project_tools::ProjectSource,
+    model: Arc<ProjectModel>,
+    audit: Value,
+    output: PathBuf,
+    focus: i64,
+    options: RenderOptions,
+    tool: &'static str,
+    version: u32,
+}
 pub fn specs() -> Vec<ToolSpec> {
     let e = Effects::EVIDENCE.union(Effects::CARRIES_TARGET_CONTENT);
     let w = Effects::WRITES_FILESYSTEM.union(e);
@@ -183,6 +207,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<VideoRequest>,
             mp4_video,
+        ),
+        spec(
+            "formats_project_file_report_export",
+            "Export metadata-only project reports",
+            "Read an explicit project path without inspecting geometry and export source-hash/focus-bound CSVs plus a version-2 snapshot/manifest. Optional expected_source_sha256 rejects a changed file before publication. Loaded 3D caches remain unchanged; existing outputs are preserved.",
+            "Export schedule and cost tables even when there is no drawable 3D model.",
+            Toolset::Formats,
+            w,
+            Requires::Nothing,
+            schema_of::<FileReportRequest>,
+            file_report,
         ),
         spec(
             "formats_project_report_export",
@@ -518,8 +553,43 @@ fn report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     validate_options(&s.scene, &p.options)?;
     let output = new_path(&p.output_dir)?;
     let model = scene_project_tools::scene_model(ctx)?;
-    let frame = evaluate(ctx, &model, p.focus, &p.options)?;
     let audit = audit_value(&s, &model);
+    write_report(
+        ctx,
+        params,
+        ReportInput {
+            source: scene_project_tools::ProjectSource { scene_id: Some(p.scene_id), source_sha256: s.scene.source_sha256.clone(), subject: s.subject.clone() },
+            model,
+            audit,
+            output,
+            focus: p.focus,
+            options: p.options,
+            tool: "formats_project_report_export",
+            version: 1,
+        },
+    )
+}
+fn file_report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: FileReportRequest = parse_params(params.clone())?;
+    let output = new_path(&p.output_dir)?;
+    check(ctx)?;
+    if let Some(sha) = &p.expected_source_sha256
+        && (sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err(ToolError::invalid("Expected source SHA-256 must contain 64 hexadecimal digits."));
+    }
+    let (source, model) = scene_project_tools::metadata_model(ctx, &p.path)?;
+    if p.expected_source_sha256.as_ref().is_some_and(|sha| !sha.eq_ignore_ascii_case(&source.source_sha256)) {
+        return Err(ToolError::invalid("The project file changed since the displayed metadata snapshot. Reload it before exporting."));
+    }
+    let ids = model.tasks.iter().filter(|t| !t.display_id.is_empty()).count();
+    let audit = json!({"schema_version":1,"source_sha256":source.source_sha256,"geometry_coverage":"not_inspected","tasks":model.tasks.len(),"reader_display_ids_present":ids,"reader_display_ids_blank":model.tasks.len()-ids,"native_display_id_semantics_verified":false,"native_material_parity_verified":false,"limitations":["Explicit-path metadata only; no drawable geometry or material coverage is inferred.","Source IDs, money context and engineering quantities retain unresolved native semantics."]});
+    let options = RenderOptions { best_dates: p.best_dates, interval_preview: p.interval_preview, profile_effects: p.profile_effects, ..Default::default() };
+    write_report(ctx, params, ReportInput { source, model, audit, output, focus: p.focus, options, tool: "formats_project_file_report_export", version: 2 })
+}
+fn write_report(ctx: &mut Ctx<'_>, params: Value, input: ReportInput) -> Result<ToolOutput, ToolError> {
+    let ReportInput { source, model, audit, output, focus, options, tool, version } = input;
+    let frame = evaluate(ctx, &model, focus, &options)?;
     let tasks = values(&model.tasks)?;
     let resources = values(&model.resources)?;
     let mut costs = values(&frame.costs.lines)?;
@@ -529,7 +599,10 @@ fn report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     }
     let expenses = frame.costs.recorded_actual_expenses.as_ref().map(|e| values(&e.items)).transpose()?.unwrap_or_default();
     let phases = values(&frame.resource_phases)?;
-    let snapshot = json!({"version":1,"scene_id":p.scene_id,"source_sha256":s.scene.source_sha256,"focus":p.focus,"tasks":model.tasks,"resources":model.resources,"frame":frame,"audit":audit});
+    let mut snapshot = json!({"version":version,"scene_id":source.scene_id,"source_sha256":source.source_sha256,"focus":focus,"tasks":model.tasks,"resources":model.resources,"frame":frame,"audit":audit});
+    if version == 2 {
+        snapshot["geometry_coverage"] = json!("not_inspected");
+    }
     let mut files = BTreeMap::new();
     let mut tables = Vec::new();
     for (name, rows) in [("tasks.csv", tasks), ("resources.csv", resources), ("costs.csv", costs), ("actual_expenses.csv", expenses), ("phases.csv", phases)] {
@@ -543,7 +616,11 @@ fn report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::invalid("Snapshot exceeds the 64 MiB report budget."));
     }
     files.insert("snapshot.json".into(), raw);
-    let manifest = json!({"version":1,"scene_id":p.scene_id,"source_sha256":s.scene.source_sha256,"focus":p.focus,"options":p.options,"tables":tables,"snapshot_sha256":files.get("snapshot.json").map(|b|digest(b)),"totals":{"direct_budget_minor":frame.costs.direct_budget_minor,"resource_forecast_minor":frame.costs.resource_budget_minor,"unresolved_direct_lines":frame.costs.unresolved_direct_budget_lines,"unresolved_resource_lines":frame.costs.unresolved_resource_budget_lines,"recorded_expenses":frame.costs.recorded_actual_expenses.as_ref().map(|e|json!({"recorded_total_minor":e.recorded_total_minor,"recorded_at_focus_minor":e.recorded_at_focus_minor,"partial_recorded_total_minor":e.partial_recorded_total_minor,"partial_recorded_at_focus_minor":e.partial_recorded_at_focus_minor}))},"spreadsheet_text_policy":"Potential formula text is prefixed with an apostrophe; raw values remain in snapshot.json.","money_policy":"Stored source currency context, scale 100; no currency/unit conversion. Direct budgets, resource forecasts and recorded expenses are separate.","native_parity_verified":false,"completion_marker":"manifest.json is written last; a folder without it is incomplete"});
+    let mut manifest = json!({"version":version,"scene_id":source.scene_id,"source_sha256":source.source_sha256,"focus":focus,"options":options,"tables":tables,"snapshot_sha256":files.get("snapshot.json").map(|b|digest(b)),"totals":{"direct_budget_minor":frame.costs.direct_budget_minor,"resource_forecast_minor":frame.costs.resource_budget_minor,"unresolved_direct_lines":frame.costs.unresolved_direct_budget_lines,"unresolved_resource_lines":frame.costs.unresolved_resource_budget_lines,"recorded_expenses":frame.costs.recorded_actual_expenses.as_ref().map(|e|json!({"recorded_total_minor":e.recorded_total_minor,"recorded_at_focus_minor":e.recorded_at_focus_minor,"partial_recorded_total_minor":e.partial_recorded_total_minor,"partial_recorded_at_focus_minor":e.partial_recorded_at_focus_minor}))},"spreadsheet_text_policy":"Potential formula text is prefixed with an apostrophe; raw values remain in snapshot.json.","money_policy":"Stored source currency context, scale 100; no currency/unit conversion. Direct budgets, resource forecasts and recorded expenses are separate.","native_parity_verified":false,"completion_marker":"manifest.json is written last; a folder without it is incomplete"});
+    if version == 2 {
+        manifest["geometry_coverage"] = json!("not_inspected");
+        manifest["options"] = json!({"best_dates":options.best_dates,"interval_preview":options.interval_preview,"profile_effects":options.profile_effects});
+    }
     check(ctx)?;
     std::fs::create_dir(&output).map_err(|e| ToolError::io(output.display(), e))?;
     for (name, bytes) in files {
@@ -557,12 +634,77 @@ fn report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let mut manifest_file = tempfile::NamedTempFile::new_in(&output).map_err(|e| ToolError::io(output.display(), e))?;
     manifest_file.write_all(&manifest_bytes).and_then(|_| manifest_file.as_file().sync_all()).map_err(|e| ToolError::io(output.display(), e))?;
     manifest_file.persist_noclobber(output.join("manifest.json")).map_err(|e| ToolError::io(output.display(), e.error))?;
-    let ev=builder(ctx,"formats_project_report_export",s.subject.clone(),params).summary("Exported source-bound project report tables").confidence(Confidence::Derived).result(json!({"output_dir":output,"manifest":manifest})).limitation(Limitation::new("report_scope","Missing amounts remain empty. Partial subtotals retain unresolved counts; no engineering aggregate, currency conversion or complete native parity is inferred.")).target_content(true).build()?;
+    let ev=builder(ctx,tool,source.subject,params).summary("Exported source-bound project report tables").confidence(Confidence::Derived).result(json!({"output_dir":output,"manifest":manifest})).limitation(Limitation::new("report_scope","Missing amounts remain empty. Partial subtotals retain unresolved counts; no engineering aggregate, currency conversion or complete native parity is inferred.")).target_content(true).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn metadata_engine() -> (tempfile::TempDir, crate::Engine, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.sp");
+        std::fs::write(&path, super::super::scene_project_tools::tests::empty_metadata_project()).unwrap();
+        (dir, crate::Engine::new(crate::testing::session()), path)
+    }
+    #[test]
+    fn metadata_csv_without_drawable_scene_is_source_bound_and_no_clobber() {
+        let (dir, engine, path) = metadata_engine();
+        let raw = std::fs::read(&path).unwrap();
+        assert!(craft_anything_formats::sp_project::parse(&raw, |_| true).is_err());
+        let output = dir.path().join("report");
+        let params = json!({"path":path,"output_dir":output,"focus":123,"expected_source_sha256":digest(&raw),"best_dates":true});
+        let result = engine.call("formats_project_file_report_export", params.clone(), crate::CallOptions::new(crate::Caller::Cli)).unwrap().to_json();
+        let manifest = &result["result"]["manifest"];
+        assert_eq!(manifest["version"], 2);
+        assert!(manifest["scene_id"].is_null());
+        assert_eq!(manifest["geometry_coverage"], "not_inspected");
+        assert_eq!(manifest["source_sha256"], digest(&raw));
+        assert_eq!(manifest["focus"], 123);
+        let snapshot = std::fs::read(output.join("snapshot.json")).unwrap();
+        assert_eq!(manifest["snapshot_sha256"], digest(&snapshot));
+        for table in manifest["tables"].as_array().unwrap() {
+            assert_eq!(table["rows"], 0);
+            let bytes = std::fs::read(output.join(table["file"].as_str().unwrap())).unwrap();
+            assert_eq!(table["sha256"], digest(&bytes));
+        }
+        assert!(engine.session().ext.get::<LoadedScene>().is_none());
+        let before = std::fs::read(output.join("manifest.json")).unwrap();
+        assert!(engine.call("formats_project_file_report_export", params, crate::CallOptions::new(crate::Caller::Cli)).is_err());
+        assert_eq!(before, std::fs::read(output.join("manifest.json")).unwrap());
+    }
+    #[test]
+    fn metadata_report_changed_source_bad_inputs_and_cancel_do_not_publish() {
+        let (dir, engine, path) = metadata_engine();
+        let output = dir.path().join("report");
+        let original = std::fs::read(&path).unwrap();
+        let mut changed = original.clone();
+        changed[16] = 1;
+        std::fs::write(&path, &changed).unwrap();
+        assert!(craft_anything_formats::sp_project::parse_metadata(&changed, |_| true).is_ok());
+        let params = json!({"path":path,"output_dir":output,"focus":0,"expected_source_sha256":digest(&original)});
+        let error = engine.call("formats_project_file_report_export", params, crate::CallOptions::new(crate::Caller::Cli)).unwrap_err();
+        assert!(error.message.contains("changed"));
+        assert!(!output.exists());
+        let cancel = crate::CancelToken::default();
+        cancel.cancel();
+        assert!(
+            engine
+                .call(
+                    "formats_project_file_report_export",
+                    json!({"path":path,"output_dir":output,"focus":0}),
+                    crate::CallOptions::new(crate::Caller::Cli).with_cancel(cancel)
+                )
+                .is_err()
+        );
+        assert!(!output.exists());
+        std::fs::write(&path, b"invalid").unwrap();
+        assert!(
+            engine
+                .call("formats_project_file_report_export", json!({"path":path,"output_dir":output,"focus":0}), crate::CallOptions::new(crate::Caller::Cli))
+                .is_err()
+        );
+        assert!(!output.exists());
+    }
     #[test]
     fn csv_quotes_and_guards_text_without_rewriting_numbers() {
         let bytes = csv(&[json!({"name":"=SUM(1,2)","amount":-12,"note":"line1\n\"line2\""})]).unwrap();

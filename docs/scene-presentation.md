@@ -82,7 +82,7 @@ and [H.264 encoder options](https://ffmpeg.org/ffmpeg-codecs.html).
 
 ## Reports
 
-Schedule report / Cost report opens Export CSV reports for the loaded 3D project. Select a new output folder name. Metadata-only path export remains explicit future work; presentation/report windows are suspended while the metadata-only view is active.
+Schedule report / Cost report opens Export CSV reports for the loaded 3D project. Select a new output folder name. Its presentation/report windows remain suspended during metadata-only viewing; the separate metadata panel has its own explicit-path export.
 `formats_project_report_export` writes tasks.csv, resources.csv, costs.csv,
 actual_expenses.csv, phases.csv, snapshot.json and manifest.json. Every report is tied to
 source hash, scene hash, focus and date/appearance policy. Direct budgets, resource forecasts
@@ -92,6 +92,26 @@ minor-unit scale 100; no currency/unit conversion or engineering aggregate is in
 `display_id` is the reader field, with unverified native semantics; GUID is the stable source
 reference. Potential spreadsheet-formula text is prefixed with an apostrophe and CSV quotes
 are escaped. snapshot.json preserves unmodified text and structured values.
+
+For metadata without a drawable scene, select File / Schedule only and use Export metadata
+CSV in that panel. Enter the source path in the viewer before choosing Schedule only; Open
+is the separate 3D action. The export uses the displayed metadata source hash, focus, date
+mode and appearance-preview policy. Changing the selected metadata source cancels its jobs
+and discards stale completion/error callbacks. Playback stops when export starts.
+
+`formats_project_file_report_export` accepts an absolute `path`, new `output_dir`, `focus`,
+optional `expected_source_sha256` and the three metadata policy flags `best_dates`,
+`interval_preview`, `profile_effects`. It reads and validates the admitted metadata layout
+without inspecting drawable geometry. A mismatched expected hash refuses publication and
+asks for a reload. This tool works without an open scene or GPU and preserves separately
+loaded scene/model/frame caches. It uses the same CSV writer and budget/expense policies.
+
+Explicit-path reports use version-2 manifest/snapshot schemas with `scene_id: null` and
+`geometry_coverage: "not_inspected"`. Their audit contains metadata coverage rather than
+invented geometry/material counts. Loaded-scene reports retain version 1 unchanged.
+These are immutable new outputs; there is no in-place migration of existing reports.
+Readable date columns and reusable report templates remain future work; raw displayed-clock
+scalars are retained without timezone conversion.
 
 The destination directory must not exist. Files are created without replacement and a valid
 manifest is published last. Cancellation/I/O failure may leave an incomplete directory;

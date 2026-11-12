@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Metadata-only Source-bound project report manifest",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "focus",
+    "tables",
+    "snapshot_sha256",
+    "totals",
+    "money_policy",
+    "completion_marker",
+    "geometry_coverage"
+  ],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "scene_id": {
+      "type": "null"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "focus": {
+      "type": "integer"
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "rows",
+          "sha256"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
+          }
+        }
+      }
+    },
+    "snapshot_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "totals": {
+      "type": "object"
+    },
+    "money_policy": {
+      "type": "string"
+    },
+    "completion_marker": {
+      "type": "string"
+    },
+    "geometry_coverage": {
+      "const": "not_inspected"
+    }
+  }
+}

@@ -92,3 +92,7 @@ project. Source audit is available on 3D/Navigator. See [the workflow and format
 MP4 video on 4D Review opens the shared presentation panel. Check MP4 encoder verifies
 a local FFmpeg/libx264 build; Export MP4 writes a new compressed video with a version-2
 manifest and decoded-frame checks. AVI remains available. See [video details](scene-presentation.md).
+
+Schedule only has its own Export metadata CSV action. It exports the displayed explicit
+source/focus snapshot without loading drawable geometry or using a retained 3D scene.
+Changed source hashes require a reload; outputs are new source-bound v2 report folders.

@@ -6,6 +6,32 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Metadata-only CSV export (R3.14)
+
+Schedule only now offers Export metadata CSV through the new headless
+`formats_project_file_report_export` tool. An explicit project path is sufficient; no
+loaded scene or GPU is needed by the engine. The exporter revalidates the source hash,
+focus and metadata date/preview policies, then shares the existing CSV/snapshot writer.
+An expected hash mismatch refuses publication. Loaded scene/model/frame caches remain
+unchanged. Source changes cancel metadata report jobs and discard stale UI callbacks.
+
+Explicit-path report manifest/snapshot version 2 records a null scene ID and
+`geometry_coverage: not_inspected`; it does not invent geometry/material coverage.
+Loaded-scene reports retain version 1. Output directories must be new; manifests are
+published last. Missing amounts, separate budgets/forecasts/recorded expenses, CSV formula
+guards and existing report size caps are unchanged.
+
+Validation: 1,776 tests passed in the final selected run, 10 library tests intentionally
+ignored: all five library suites and six relevant integration harnesses, including six
+explicit GPU cases. Regressions cover empty/non-drawable metadata, changed source hashes,
+cancellation, invalid inputs, no-clobber publication, loaded-scene cache preservation and
+stale report errors after changing source. Two private real-project UI exports ran with no
+loaded scene. An independent CSV parser checked every cell, row count, file hash and
+source/focus snapshot; both v2 schemas validated on both files. A fresh headless CLI export
+produced all seven files byte-for-byte identical to the matching UI export. Formatting,
+all-target clippy, layers, locks, tools and secrets passed. The earlier 250-harness matrix
+was not repeated. Readable CSV dates and reusable report templates remain future work.
+
 ### Compressed project video (R3.14)
 
 MP4 video on 4D Review and the shared presentation panel use an optional local FFmpeg
@@ -57,7 +83,7 @@ OpenCV decoding verified all three source-time frames, hashes and random seeking
 independent CSV parser verified row counts, file hashes and separate subtotals. Four output
 schemas validated. All-target clippy, formatting, layers, locks, tools and secrets passed.
 Source parser/analysis crates were not changed. See [presentation details](scene-presentation.md).
-Formatted templates and metadata-only path report export remain future work.
+Readable CSV date columns and formatted templates remain future work.
 
 ### Planning workspace for project viewing (R3.14)
 

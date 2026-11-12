@@ -1108,3 +1108,12 @@ Exercise save/load through the real engine and UI callback, including a no-GPU r
 Keep export windows suspended in metadata-only mode so a retained drawable scene cannot
 be mistaken for the separately displayed metadata source. Compare decoded exported frame
 bytes and source-bound CSV totals independently; successful file creation alone is insufficient.
+
+**UI test contexts must use the installed API.** In egui 0.36 an isolated frame uses
+`Context::run_ui` with a mutable Ui; older `Context::run` examples do not compile.
+Run all-target checks after the final test edits as well as after production edits.
+Headless context tests that intentionally skip painting must clear unapplied texture deltas
+before dropping the frame output. Async job tests must mark the worker visible when waiting
+with `Jobs::busy`, which deliberately excludes hidden work.
+`egui_kittest::Node::type_text` queues text events; focus the text field and step first,
+then verify its value before waiting for an enabled submit button.

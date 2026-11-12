@@ -25,6 +25,10 @@ struct Done {
     result: Result<Arc<LatestMetadataFrame>, String>,
 }
 
+enum ReportDone {
+    Path { generation: u64, path: Option<String> },
+    Export { generation: u64, key: Key, source_sha256: String, output: String },
+}
 /// A separate workflow for projects whose drawable geometry is not inspected.
 pub struct MetadataPanel {
     engine: Arc<Engine>,
@@ -41,6 +45,10 @@ pub struct MetadataPanel {
     error: Option<String>,
     selected_task: Option<String>,
     last_tick: Instant,
+    report_jobs: Jobs<ReportDone>,
+    report_job: Option<u64>,
+    report_dir: String,
+    report_status: Option<String>,
 }
 impl MetadataPanel {
     pub fn new(engine: Arc<Engine>, path: String) -> Self {
@@ -59,6 +67,10 @@ impl MetadataPanel {
             error: None,
             selected_task: None,
             last_tick: Instant::now(),
+            report_jobs: Jobs::default(),
+            report_job: None,
+            report_dir: String::new(),
+            report_status: None,
         }
     }
     pub fn request_open(&mut self, path: String) {
@@ -80,6 +92,11 @@ impl MetadataPanel {
         }
     }
     fn invalidate(&mut self) {
+        for job in self.report_jobs.running() {
+            job.cancel.cancel();
+        }
+        self.report_status = None;
+        self.report_job = None;
         for job in self.jobs.running() {
             job.cancel.cancel();
         }
@@ -184,6 +201,73 @@ impl MetadataPanel {
             Ok(Done { generation, key, result })
         }));
     }
+    fn reports(&mut self, ui: &mut egui::Ui) {
+        self.report_jobs.set_repaint(ui.ctx());
+        for done in self.report_jobs.poll() {
+            if self.report_job != Some(done.job) {
+                continue;
+            }
+            self.report_job = None;
+            match done.result {
+                Ok(ReportDone::Path { generation, path }) if generation == self.generation => {
+                    if let Some(path) = path {
+                        self.report_dir = path;
+                    }
+                }
+                Ok(ReportDone::Export { generation, key, source_sha256, output })
+                    if generation == self.generation && key == self.key() && self.source_sha256.as_deref() == Some(&source_sha256) =>
+                {
+                    self.report_status = Some(format!("CSV reports exported: {output}"));
+                }
+                Ok(_) => {}
+                Err(error) => self.report_status = Some(error),
+            }
+        }
+        ui.separator();
+        ui.label("Export metadata-only CSV reports");
+        ui.horizontal(|ui| {
+            let response = ui.text_edit_singleline(&mut self.report_dir);
+            crate::widgets::named(response, "Metadata report folder");
+            if ui.add_enabled(!self.report_jobs.busy(), egui::Button::new("Browse CSV folder")).clicked() {
+                let generation = self.generation;
+                self.report_job = Some(self.report_jobs.spawn("Choose metadata report folder", true, move |_| {
+                    let path = rfd::FileDialog::new().set_file_name("metadata-report").save_file();
+                    Ok(ReportDone::Path { generation, path: path.map(|p| p.to_string_lossy().into_owned()) })
+                }));
+            }
+        });
+        let ready = self.latest.is_some() && !self.pending && !self.jobs.busy() && !self.report_jobs.busy() && !self.report_dir.is_empty();
+        if ui.add_enabled(ready, egui::Button::new("Export metadata CSV")).clicked() {
+            self.state.playing = false;
+            self.report_status = None;
+            let generation = self.generation;
+            let key = self.key();
+            let output = self.report_dir.clone();
+            if let Some(source_sha256) = self.source_sha256.clone() {
+                let engine = self.engine.clone();
+                self.report_job = Some(self.report_jobs.spawn("Export metadata-only reports", true, move |job| {
+                    let reporter = job.reporter();
+                    engine.call("formats_project_file_report_export", json!({"path":key.path,"output_dir":output,"focus":key.focus,"expected_source_sha256":source_sha256,"best_dates":key.best,"interval_preview":key.preview,"profile_effects":key.effects}), CallOptions::new(Caller::Ui).with_cancel(job.cancel.clone()).with_progress(&reporter)).map_err(|e|e.for_people())?;
+                    Ok(ReportDone::Export { generation, key, source_sha256, output })
+                }));
+            }
+        }
+        if self.report_jobs.busy() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Exporting metadata CSV...");
+                if ui.button("Cancel CSV export").clicked() {
+                    for job in self.report_jobs.running() {
+                        job.cancel.cancel();
+                    }
+                }
+            });
+        }
+        if let Some(status) = &self.report_status {
+            ui.label(status);
+        }
+        ui.small("Choose a new folder name. Reports use the displayed source hash and focus; geometry is not inspected. A folder without manifest.json is incomplete.");
+    }
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.jobs.set_repaint(ui.ctx());
         self.poll();
@@ -193,6 +277,7 @@ impl MetadataPanel {
         if let Some(sha) = &self.source_sha256 {
             ui.small(format!("Source SHA-256: {sha}"));
         }
+        self.reports(ui);
         let key = self.key();
         project_panel::metadata_controls(ui, &mut self.state, self.latest.as_ref().map(|latest| latest.frame.as_ref()));
         if self.key() != key {
@@ -244,8 +329,45 @@ impl MetadataPanel {
 }
 impl Drop for MetadataPanel {
     fn drop(&mut self) {
+        for job in self.report_jobs.running() {
+            job.cancel.cancel();
+        }
         for job in self.jobs.running() {
             job.cancel.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn switching_metadata_source_discards_a_delayed_report_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Engine::new(craft_anything_engine::Session::isolated(dir.path())));
+        let mut panel = MetadataPanel::new(engine, "first.sp".into());
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = release.clone();
+        panel.report_job = Some(panel.report_jobs.spawn("Delayed test report", true, move |_| {
+            let started = Instant::now();
+            while !worker.load(std::sync::atomic::Ordering::SeqCst) && started.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("Failure from previous source".into())
+        }));
+        panel.request_open("second.sp".into());
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let ctx = egui::Context::default();
+        let started = Instant::now();
+        loop {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| panel.reports(ui));
+            output.textures_delta.clear();
+            if !panel.report_jobs.busy() {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(panel.report_status.is_none());
     }
 }
