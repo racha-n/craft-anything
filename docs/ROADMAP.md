@@ -2494,7 +2494,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add cost/progress editing and cost charts before enabling the grey Project Controls editing/analysis commands.
 - [x] Export source-hash/focus-bound task, resource, budget and actual-expense CSV reports through engine tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-- [ ] Add optional compressed MP4 encoding with bounded cancellation and reproducible frame checks.
+- [ ] Add optional compressed MP4 encoding with bounded cancellation and reproducible frame checks. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Extend CSV report export to explicit metadata-only paths without requiring a drawable scene.
 - [ ] Add report templates, docking/named workspaces and saved searches before enabling their remaining grey commands.
 - [ ] Resolve absent source task display IDs in the admitted real-project case; keep the inspector explicitly unresolved until validated.
