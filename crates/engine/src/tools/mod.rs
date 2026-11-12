@@ -29,6 +29,7 @@ pub mod native_workflows;
 pub mod report_tools;
 pub mod session_tools;
 // Shared input helpers for the built-in format tools.
+pub mod scene_presentation_tools;
 pub mod scene_project_tools;
 pub mod scene_quantity_tools;
 pub mod scene_tools;
@@ -126,6 +127,7 @@ pub fn all() -> Vec<crate::ToolSpec> {
     v.extend(scene_project_tools::specs());
     v.extend(scene_quantity_tools::specs());
     v.extend(scene_view_tools::specs());
+    v.extend(scene_presentation_tools::specs());
     v.extend(artifact_tools::specs());
     v.extend(js_tools::specs());
     v.extend(web_tools::specs());

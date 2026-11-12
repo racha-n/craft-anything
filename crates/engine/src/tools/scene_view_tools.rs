@@ -9,30 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CameraPose {
-    pub target: [f64; 3],
-    pub yaw: f64,
-    pub pitch: f64,
-    pub distance: f64,
-    pub y_up: bool,
-}
-impl CameraPose {
-    pub fn validate(&self) -> Result<(), ToolError> {
-        if self.target.iter().any(|v| !v.is_finite() || v.abs() > 1e18)
-            || !self.yaw.is_finite()
-            || self.yaw.abs() > 1e6
-            || !self.pitch.is_finite()
-            || self.pitch.abs() > std::f64::consts::FRAC_PI_2
-            || !self.distance.is_finite()
-            || !(1e-6..=1e14).contains(&self.distance)
-        {
-            return Err(ToolError::invalid("Invalid camera pose; fit the scene and save again."));
-        }
-        Ok(())
-    }
-}
+pub use craft_anything_engines::scene_render::camera::Camera as CameraPose;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Viewpoint {

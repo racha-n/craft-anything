@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Structured project report snapshot",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "focus",
+    "tasks",
+    "resources",
+    "frame",
+    "audit"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "focus": {
+      "type": "integer"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "frame": {
+      "type": "object"
+    },
+    "audit": {
+      "type": "object"
+    }
+  }
+}

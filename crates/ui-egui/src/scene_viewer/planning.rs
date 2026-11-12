@@ -33,6 +33,13 @@ pub struct FutureCommand {
     pub reason: &'static str,
 }
 pub const FUTURE_COMMANDS: &[FutureCommand] = &[
+    FutureCommand {
+        tab: Tab::Review,
+        group: "Presentation",
+        icon: "download",
+        label: "Compressed MP4",
+        reason: "Planned: compressed video encoding. Lossless AVI export is available.",
+    },
     FutureCommand { tab: Tab::File, group: "File editing", icon: "file", label: "New project", reason: "Planned: create and write a new project." },
     FutureCommand {
         tab: Tab::File,
@@ -113,14 +120,6 @@ pub const FUTURE_COMMANDS: &[FutureCommand] = &[
         reason: "Planned: edit object placement, rotation and scale.",
     },
     FutureCommand { tab: Tab::Model, group: "3D editing", icon: "eye", label: "Edit materials", reason: "Planned: edit and persist materials and textures." },
-    FutureCommand { tab: Tab::Review, group: "Presentation", icon: "play", label: "Camera animation", reason: "Planned: author camera keyframes and paths." },
-    FutureCommand {
-        tab: Tab::Review,
-        group: "Presentation",
-        icon: "download",
-        label: "Export video",
-        reason: "Planned: record and export a construction-sequence video.",
-    },
     FutureCommand {
         tab: Tab::Costs,
         group: "Cost editing",
@@ -141,20 +140,6 @@ pub const FUTURE_COMMANDS: &[FutureCommand] = &[
         icon: "activity",
         label: "Cost curves",
         reason: "Planned: chart planned, actual and forecast costs over time.",
-    },
-    FutureCommand {
-        tab: Tab::Reports,
-        group: "Reports",
-        icon: "clipboard-list",
-        label: "Schedule report",
-        reason: "Planned: generate and export a formatted task report.",
-    },
-    FutureCommand {
-        tab: Tab::Reports,
-        group: "Reports",
-        icon: "clipboard-list",
-        label: "Cost report",
-        reason: "Planned: generate and export a formatted cost report.",
     },
     FutureCommand { tab: Tab::Reports, group: "Reports", icon: "file", label: "Report templates", reason: "Planned: customize reusable report layouts." },
     FutureCommand {
@@ -379,6 +364,33 @@ impl SceneApp {
                         self.viewpoints_menu(ui);
                         ui.checkbox(&mut self.state.planning.show_cube, "View cube");
                     });
+                    if self.state.planning.tab == Tab::Review {
+                        group(ui, "Presentation", |ui| {
+                            if command(ui, "play", "Camera animation", loaded) {
+                                self.state.presentation.show = true;
+                            }
+                            if command(ui, "download", "Export video", loaded) {
+                                self.state.presentation.show = true;
+                            }
+                        });
+                    }
+                    if self.state.planning.tab == Tab::Reports {
+                        group(ui, "Reports", |ui| {
+                            if command(ui, "clipboard-list", "Schedule report", loaded) {
+                                self.state.presentation.show_reports = true;
+                            }
+                            if command(ui, "clipboard-list", "Cost report", loaded) {
+                                self.state.presentation.show_reports = true;
+                            }
+                        });
+                    }
+                    if matches!(self.state.planning.tab, Tab::Model | Tab::Navigator) {
+                        group(ui, "Source evidence", |ui| {
+                            if command(ui, "info", "Source audit", loaded) {
+                                self.state.presentation.show_audit = true;
+                            }
+                        });
+                    }
                     match self.state.planning.tab {
                         Tab::File => {
                             group(ui, "Input", |ui| {
@@ -391,6 +403,7 @@ impl SceneApp {
                             group(ui, "Time", |ui| {
                                 if command(ui, "play", if self.state.project.playing { "Pause timeline" } else { "Play timeline" }, loaded) {
                                     self.state.project.mode = project_panel::Mode::Schedule;
+                                    self.state.presentation.playing = false;
                                     self.state.project.playing = !self.state.project.playing;
                                 }
                                 if command(ui, "layers", "Isolate task", self.state.planning.selected_task.is_some())

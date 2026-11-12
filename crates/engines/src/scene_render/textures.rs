@@ -1,8 +1,8 @@
 //! Bounded, opt-in source image candidates. Channel order and sampling are not native-verified.
-use craft_anything_engine::CancelToken;
 use craft_anything_formats::{project_textures::CachedImage, scene_bundle::Scene};
-use eframe::wgpu as w;
+use craft_anything_platform::cancel::CancelToken;
 use std::collections::BTreeMap;
+use wgpu as w;
 #[path = "texture_decode.rs"]
 mod decoding;
 use decoding::{MAX_DECODED_BYTES, decode_parts, rgba_size};

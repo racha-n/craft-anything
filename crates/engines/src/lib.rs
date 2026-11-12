@@ -19,6 +19,7 @@ pub mod jadx;
 mod known_roots_tests;
 pub mod mcp_client;
 pub mod rizin;
+pub mod scene_render;
 pub mod table;
 #[cfg(feature = "wasm-plugins")]
 pub mod wasm_plugin;

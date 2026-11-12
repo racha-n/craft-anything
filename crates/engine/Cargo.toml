@@ -29,6 +29,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 regex = { workspace = true }
 dirs = "6"
+tempfile = "3"
 # Browser (Chrome DevTools Protocol) client: hand-rolled WebSocket framing needs only a SHA-1 and
 # base64 for the loopback handshake; PNG decoding is for screenshot pixel diffs. All pure Rust.
 base64 = "0.22"

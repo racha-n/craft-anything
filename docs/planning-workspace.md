@@ -36,9 +36,9 @@ otherwise implemented commands and is distinguished from a missing capability.
 | Plan | New task, hierarchy editing, links, rescheduling, critical path, calendar editing, baselines |
 | Resources | New resources, assignment editing, resource wizard, appearance-profile editing |
 | 3D | Import/export models, edit transforms and materials |
-| 4D Review | Camera animation, video export |
+| 4D Review | Compressed MP4 encoding (lossless AVI is available) |
 | Project Controls | Cost editing, progress entry, time-series cost charts |
-| Reports | Schedule/cost reports and report templates |
+| Reports | Formatted/reusable report templates (CSV reports are available) |
 | Windows / Navigator | Docking, named workspaces and saved searches |
 
 These are visible backlog items, not promises that the reader/writer already implements them.
@@ -84,3 +84,8 @@ assigned tasks; choosing a linked task reveals it in the schedule. Fit linked
 selection moves the camera. Isolation remains an explicit separate action.
 `formats_project_selection_links` exposes the direct source joins headlessly.
 Resource ancestry and native display IDs are never invented.
+
+## Presentation and report follow-up
+
+Camera animation, Export video, Schedule report and Cost report are active for a loaded
+project. Source audit is available on 3D/Navigator. See [the workflow and format limits](scene-presentation.md).

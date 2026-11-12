@@ -25,6 +25,9 @@ base64 = "0.22"
 # The WebSocket handshake of the CDP client.
 sha1 = "0.10"
 toml = { workspace = true }
+schemars = { workspace = true }
+wgpu = "=30.0.1"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
 # WASM component plugins (R1.8), only with the `wasm-plugins` feature: a large build, so off by
 # default. Safe API; no unsafe in our code.
 wasmtime = { version = "49", optional = true, default-features = false, features = ["std", "runtime", "cranelift", "component-model", "wat"] }

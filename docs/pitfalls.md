@@ -1100,3 +1100,11 @@ symbols. Find the owning object directory in the error, stop its completed/faile
 build, and quarantine only that crate's test incremental cache and test fingerprint.
 Preserve working executables and other caches, then rebuild and rerun the failed tests.
 Never treat a linker failure as a passing test or disable a regression to get past it.
+
+**A value response was decoded as an unwrapped UI payload.** `ToolOutput::to_json` wraps
+Value outputs under `result`, just as evidence exposes its data there. Reading a camera
+sidecar's `animation` at the top level saved successfully but silently failed to reload.
+Exercise save/load through the real engine and UI callback, including a no-GPU regression.
+Keep export windows suspended in metadata-only mode so a retained drawable scene cannot
+be mistaken for the separately displayed metadata source. Compare decoded exported frame
+bytes and source-bound CSV totals independently; successful file creation alone is insufficient.

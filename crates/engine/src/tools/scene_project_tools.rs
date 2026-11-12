@@ -216,6 +216,9 @@ fn model(ctx: &mut Ctx<'_>, path: Option<&str>) -> Result<(ProjectSource, Arc<Pr
     ctx.session.ext.insert(Arc::new(CachedProject { scene_id: source.scene.id.clone(), model: parsed.clone() }));
     Ok((identity, parsed))
 }
+pub(super) fn scene_model(ctx: &mut Ctx<'_>) -> Result<Arc<ProjectModel>, ToolError> {
+    model(ctx, None).map(|(_, model)| model)
+}
 fn formats_project_tasks_list(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: Page = parse_params(params.clone())?;
     let (source, model) = model(ctx, p.path.as_deref())?;

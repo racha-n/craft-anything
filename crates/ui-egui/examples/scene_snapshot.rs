@@ -87,6 +87,16 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
 
     let model = h.state().model.clone().ok_or("No scene loaded")?;
     let scene = &model.scene;
+    let appearances=scene.instances.iter().enumerate().filter_map(|(i,instance)|scene.object_colors.get(&i).map(|rgb|serde_json::json!({"instance":i,"entity_guid":instance.entity_guid,"object_rgb_candidate":rgb,"source_diffuse_candidate":scene.source_colors.get(&i),"world_bounds":instance.bounds}))).collect::<Vec<_>>();
+    std::fs::write(
+        output.join("appearance-witnesses.json"),
+        serde_json::to_vec_pretty(
+            &serde_json::json!({"version":1,"source_sha256":scene.source_sha256,"instances":appearances,"native_material_parity_verified":false}),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
     if h.state().state.planning.enabled
         && let Some(task) = model.metadata.get("tasks").and_then(|v| v.as_array()).and_then(|v| v.first())
         && let Some(guid) = task.get("guid").and_then(|v| v.as_str())
@@ -123,6 +133,133 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         h.render()?.save(output.join("gantt-zoomed.png")).map_err(|e| e.to_string())?;
         h.get_by_label("Fit timeline").click();
         h.run_steps(2);
+    }
+    if model.metadata.get("tasks").is_some() {
+        let original_camera = h.state().state.camera.clone();
+        let original_focus = h.state().state.project.focus;
+        h.state_mut().state.planning.tab = craft_anything_ui_egui::scene_viewer::planning::Tab::Review;
+        h.step();
+        h.get_by_label("Camera animation").click();
+        h.run_steps(3);
+        h.get_by_label("Capture keyframe").click();
+        h.run_steps(2);
+        let end = h.state().project_frame.as_ref().and_then(|f| f.frame.timeline.end).unwrap_or(original_focus + 86400);
+        h.state_mut().state.project.focus = end.saturating_add(86400);
+        h.state_mut().state.camera.orbit([70., 10.]);
+        h.state_mut().changed();
+        settle(&mut h)?;
+        h.state_mut().state.presentation.next_seconds = 1.;
+        h.step();
+        h.get_by_label("Capture keyframe").click();
+        h.run_steps(2);
+        h.get_by_label("Save animation").click();
+        settle(&mut h)?;
+        let captured = h.state().state.presentation.keyframes.clone();
+        h.state_mut().state.presentation.keyframes.clear();
+        h.step();
+        h.get_by_label("Load animation").click();
+        settle(&mut h)?;
+        if h.state().state.presentation.keyframes.len() != 2 {
+            return Err("Saved camera path did not reload".into());
+        }
+        h.get_by_label("Play path").click();
+        settle(&mut h)?;
+        let last = captured.last().ok_or("Missing last camera keyframe")?;
+        if h.state().state.camera != last.camera || h.state().state.project.focus != last.focus {
+            return Err("Camera preview did not reach the last camera/focus keyframe".into());
+        }
+        h.render()?.save(output.join("camera-path-preview.png")).map_err(|e| e.to_string())?;
+        h.state_mut().state.presentation.video_path = output.join("project-preview.avi").to_string_lossy().into_owned();
+        h.state_mut().state.presentation.fps = 2;
+        h.state_mut().state.presentation.width = 320;
+        h.state_mut().state.presentation.height = 180;
+        h.step();
+        h.get_by_label("Export AVI").click();
+        settle(&mut h)?;
+        let video_path = output.join("project-preview.avi");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(video_path.with_extension("avi.manifest.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if manifest["frame_count"] != 3 {
+            return Err("Video did not contain all planned endpoint frames".into());
+        }
+        let graphics = h.state().graphics_state().ok_or("Missing preview graphics state")?;
+        let project = h.state().project_snapshot().ok_or("Missing project snapshot")?;
+        let options: craft_anything_engine::tools::scene_presentation_tools::RenderOptions =
+            serde_json::from_value(manifest["options"].clone()).map_err(|e| e.to_string())?;
+        let (frame_index, visible) = manifest["frames"]
+            .as_array()
+            .ok_or("Missing frame manifest")?
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f["draw"]["visible"].as_u64().unwrap_or(0)))
+            .max_by_key(|(_, n)| *n)
+            .ok_or("No exported frames")?;
+        if visible == 0 {
+            return Err("The exported demonstration contains no visible geometry".into());
+        }
+        let sampled = h.state().camera_path().ok_or("Missing camera path")?.sample((frame_index as f64 / 2.).min(1.))?;
+        let first = &sampled;
+        let cancel = craft_anything_engine::CancelToken::default();
+        let data = craft_anything_engine::tools::scene_presentation_tools::render_snapshot(
+            &cancel,
+            scene,
+            &project.model,
+            first.camera.clone(),
+            first.focus,
+            [320, 180],
+            &options,
+        )
+        .map_err(|e| e.to_string())?;
+        let mut preview = craft_anything_engines::scene_render::gpu::Gpu::new(&graphics.device, &graphics.queue, scene, &cancel)?;
+        preview.render(scene, &data, &cancel)?;
+        let reference = preview.rgba(&cancel)?;
+        let bytes = std::fs::read(&video_path).map_err(|e| e.to_string())?;
+        let stride = (320u32 * 3).div_ceil(4) * 4;
+        let mut decoded = Vec::new();
+        for row in (0..180usize).rev() {
+            let start = 232 + frame_index * (8 + stride as usize * 180) + row * stride as usize;
+            let row = bytes.get(start..start + 320 * 3).ok_or("Incomplete AVI frame")?;
+            for [b, g, r] in row.as_chunks::<3>().0 {
+                decoded.extend([*r, *g, *b, 255]);
+            }
+        }
+        if decoded != reference {
+            return Err(format!(
+                "AVI geometry frame differs from the preview graphics device: {} byte mismatches",
+                decoded.iter().zip(&reference).filter(|(a, b)| a != b).count()
+            ));
+        }
+        h.state_mut().state.presentation.show = false;
+        h.state_mut().state.presentation.show_reports = true;
+        h.state_mut().state.presentation.report_dir = output.join("csv-report").to_string_lossy().into_owned();
+        h.step();
+        h.get_by_label("Export CSV reports").click();
+        settle(&mut h)?;
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output.join("csv-report/manifest.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if report["focus"].as_i64() != Some(h.state().state.project.focus) || report["source_sha256"] != scene.source_sha256 {
+            return Err("Report identity or focus did not match the current project".into());
+        }
+        h.render()?.save(output.join("csv-report-ui.png")).map_err(|e| e.to_string())?;
+        h.state_mut().state.presentation.show_reports = false;
+        h.state_mut().state.presentation.show_audit = true;
+        h.step();
+        h.get_by_label("Refresh source audit").click();
+        settle(&mut h)?;
+        let audit = h.state().last_presentation_output.as_ref().and_then(|v| v.get("result")).ok_or("Missing source audit")?;
+        std::fs::write(output.join("source-audit.json"), serde_json::to_vec_pretty(audit).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if audit["native_display_id_semantics_verified"] != false || audit["appearance"]["native_material_parity_verified"] != false {
+            return Err("Audit promoted unresolved native semantics".into());
+        }
+        h.render()?.save(output.join("source-audit-ui.png")).map_err(|e| e.to_string())?;
+        std::fs::write(output.join("presentation-verification.json"),serde_json::to_vec_pretty(&serde_json::json!({"version":1,"camera_keyframes":2,"saved_path_reload":true,"preview_endpoint_camera_focus_match":true,"video_frames":3,"avi_pixels_equal_preview_device":true,"report_source_focus_match":true,"audit_keeps_native_unknowns":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        h.state_mut().state.presentation.show_audit = false;
+        h.state_mut().state.project.mode = craft_anything_ui_egui::scene_viewer::project_panel::Mode::Model;
+        h.state_mut().state.camera = original_camera;
+        h.state_mut().state.project.focus = original_focus;
+        h.state_mut().state.planning.tab = craft_anything_ui_egui::scene_viewer::planning::Tab::Plan;
+        h.state_mut().changed();
+        settle(&mut h)?;
     }
     let initial_draw = h.state().draw_stats().map(|(s, ms)| serde_json::json!({"draw":s,"elapsed_ms":ms}));
     if h.state().state.planning.enabled {

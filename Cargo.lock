@@ -1246,7 +1246,9 @@ dependencies = [
  "craft-anything-platform",
  "craft-anything-testkit",
  "hex",
+ "image",
  "log",
+ "schemars",
  "serde",
  "serde_json",
  "sha1",
@@ -1256,6 +1258,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "ureq",
  "wasmtime",
+ "wgpu",
 ]
 
 [[package]]

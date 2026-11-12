@@ -6,14 +6,45 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Project audit, 4D presentation and CSV reports (R3.14)
+
+The desktop and headless exporter share the native GPU renderer, camera, texture decoder
+and shader in the engines layer. Versioned scene-bound camera/focus sidecars support capture,
+reload, shortest-yaw interpolation, preview and scrubbing. Video export writes bounded,
+lossless RGB24 AVI with per-frame camera/focus/draw/hash manifests. It does not require
+an external encoder. Reports export source/focus-bound task, resource, cost, expense and
+phase CSVs plus a raw JSON snapshot; budgets, forecasts and recorded totals stay separate.
+Outputs refuse replacement and retain explicit incomplete/cancel semantics. Presentation
+windows follow the light planning theme and are suspended during metadata-only viewing.
+
+The identity/appearance audit labels reader display-ID fields and candidate material channels
+without certifying native semantics. Retained RGB controls revalidated two inherited-colour
+changes with an unrelated object unchanged. A retained JPEG quadrant control matches the
+recorded native orientation with explicit Flip texture V enabled; the default unflipped
+preview reverses its vertical order. This case does not admit a global texture conversion.
+The checked project has 206 populated reader IDs and 35 blank summary IDs; no leaf ID
+was blank. Missing summary IDs were not invented. Native display-ID rules, source-opacity
+conversion and complete native material parity
+remain unresolved, with further controls tracked in the roadmap.
+
+Validation: 3,089 distinct tests passed, 20 intentionally ignored, including 250 integration
+harnesses and six explicitly run GPU cases. Batch anchors were counted once. Two admitted
+private projects exercised the UI capture/save/load/preview/video/report/audit workflow.
+A geometry-bearing AVI frame matched the preview graphics device exactly. Independent
+OpenCV decoding verified all three source-time frames, hashes and random seeking; an
+independent CSV parser verified row counts, file hashes and separate subtotals. Four output
+schemas validated. All-target clippy, formatting, layers, locks, tools and secrets passed.
+Source parser/analysis crates were not changed. See [presentation details](scene-presentation.md).
+Compressed MP4, formatted templates and metadata-only path report export remain future work.
+
 ### Planning workspace for project viewing (R3.14)
 
 The project viewer has a light desktop planning layout with a blue ribbon,
 resource navigator, aligned task/Gantt rows above the 3D view and a properties
 inspector. Task selection inspects source values without changing visibility;
 isolation remains an explicit action. Compact layout is still available.
-Unsupported editing, exchange, animation, reporting and window-management
-commands are visibly disabled with explanations, as requested; their backlog is
+Remaining unsupported editing, exchange, compressed video, report-template and
+window-management commands are visibly disabled with explanations; their backlog is
 listed in [planning-workspace.md](planning-workspace.md). The source project remains
 read only. Rendering and interaction checks are recorded in the local interface
 delivery; this does not close the broader project-format/native-parity work.

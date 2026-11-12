@@ -5,6 +5,7 @@ mod gpu;
 mod metadata_panel;
 mod navigation;
 pub mod planning;
+pub mod presentation;
 pub mod project_panel;
 use crate::{
     jobs::Jobs,
@@ -24,6 +25,8 @@ use std::{
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ViewState {
     pub camera: camera::Camera,
+    #[serde(default)]
+    pub presentation: presentation::State,
     pub visibility: Visibility,
     pub selected_instance: Option<usize>,
     pub selected_resource: Option<usize>,
@@ -34,6 +37,15 @@ pub struct ViewState {
 }
 type SelectionKey = (String, Option<String>, Vec<usize>);
 enum Done {
+    Presentation {
+        scene_id: String,
+        tool: String,
+        output: serde_json::Value,
+    },
+    PresentationPath {
+        video: bool,
+        path: Option<String>,
+    },
     SelectionLinks {
         key: SelectionKey,
         links: craft_anything_engine::tools::scene_project_tools::SourceSelectionLinks,
@@ -91,6 +103,9 @@ pub struct SceneApp {
     viewport_rect: Option<egui::Rect>,
     selection_link_key: Option<SelectionKey>,
     selection_links: craft_anything_engine::tools::scene_project_tools::SourceSelectionLinks,
+    presentation_tick: std::time::Instant,
+    presentation_audit: Option<serde_json::Value>,
+    pub last_presentation_output: Option<serde_json::Value>,
     viewpoints_scene: Option<String>,
     viewpoints: Vec<craft_anything_engine::tools::scene_view_tools::Viewpoint>,
 }
@@ -133,6 +148,9 @@ impl SceneApp {
             viewport_rect: None,
             selection_link_key: None,
             selection_links: Default::default(),
+            presentation_tick: std::time::Instant::now(),
+            presentation_audit: None,
+            last_presentation_output: None,
             viewpoints_scene: None,
             viewpoints: Vec::new(),
         }
@@ -152,6 +170,13 @@ impl SceneApp {
     }
     pub fn draw_stats(&self) -> Option<(&draw_plan::DrawStats, u64)> {
         self.last_draw.as_ref().map(|(stats, ms)| (stats, *ms))
+    }
+    /// Immutable snapshots for embedding and renderer verification clients.
+    pub fn graphics_state(&self) -> Option<RenderState> {
+        self.graphics.clone()
+    }
+    pub fn project_snapshot(&self) -> Option<Arc<craft_anything_engine::tools::scene_project_tools::CachedProject>> {
+        self.project_model.clone()
     }
     pub fn viewport_rect(&self) -> Option<egui::Rect> {
         self.viewport_rect
@@ -188,13 +213,49 @@ impl SceneApp {
                 .call(tool, json!({"path":path}), CallOptions::new(Caller::Ui).with_cancel(j.cancel.clone()).with_progress(&report))
                 .map_err(|e| e.for_people())?;
             let model = engine.session().ext.get::<LoadedScene>().ok_or("The loaded scene is unavailable")?;
-            let gpu = gpu::Gpu::new(&graphics, &model.scene, &j.cancel)?;
+            let gpu = gpu::Gpu::new(&graphics.device, &graphics.queue, &model.scene, &j.cancel)?;
             Ok(Done::Loaded(model, Box::new(gpu)))
         });
     }
     fn poll(&mut self) {
         for done in self.jobs.poll() {
             match done.result {
+                Ok(Done::PresentationPath { video, path }) => {
+                    if let Some(path) = path {
+                        if video {
+                            self.state.presentation.video_path = path;
+                        } else {
+                            self.state.presentation.report_dir = path;
+                        }
+                    }
+                }
+                Ok(Done::Presentation { scene_id, tool, output }) => {
+                    if self.model.as_ref().is_some_and(|m| m.scene.id == scene_id) {
+                        self.last_presentation_output = Some(output.clone());
+                        if tool == "formats_scene_animation_manage" {
+                            if let Some(value) = output.get("result").and_then(|v| v.get("animation")).filter(|v| !v.is_null()) {
+                                match serde_json::from_value::<craft_anything_engines::scene_render::animation::Animation>(value.clone()) {
+                                    Ok(a) => {
+                                        self.state.presentation.scene_id = a.scene_id;
+                                        self.state.presentation.keyframes = a.keyframes;
+                                        self.state.presentation.next_seconds = self.state.presentation.keyframes.last().map_or(0., |k| k.seconds + 2.);
+                                    }
+                                    Err(e) => self.status = e.to_string(),
+                                }
+                            } else {
+                                self.status = "No saved animation for this model.".into();
+                            }
+                        } else if tool == "formats_project_audit" {
+                            self.presentation_audit = output.get("result").cloned();
+                        } else {
+                            let result = output.get("result").unwrap_or(&output);
+                            self.status = format!(
+                                "Export complete: {}",
+                                result.get("path").or_else(|| result.get("output_dir")).and_then(|v| v.as_str()).unwrap_or("see export output")
+                            );
+                        }
+                    }
+                }
                 Ok(Done::SelectionLinks { key, links }) => {
                     if self.current_selection_key().as_ref() == Some(&key) {
                         if key.1.is_some() {
@@ -237,6 +298,14 @@ impl SceneApp {
                     }
                 }
                 Ok(Done::Loaded(model, gpu)) => {
+                    self.state.presentation.playing = false;
+                    if self.state.presentation.scene_id != model.scene.id {
+                        self.state.presentation.keyframes.clear();
+                        self.state.presentation.scene_id = model.scene.id.clone();
+                        self.state.presentation.seconds = 0.;
+                        self.state.presentation.next_seconds = 0.;
+                    }
+                    self.presentation_audit = None;
                     self.measurement = None;
                     self.last_draw = None;
                     if let (Some(graphics), Some(old)) = (&self.graphics, self.texture.take()) {
@@ -624,6 +693,12 @@ impl SceneApp {
         ui.small("4D/5D interpretation limits remain explicit in the project panels.");
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if self.metadata.is_none() {
+            self.tick_presentation(ui);
+            self.presentation_windows(ui);
+        } else {
+            self.state.presentation.playing = false;
+        }
         if self.state.planning.enabled {
             ui.scope(|ui| {
                 planning::style(ui);
@@ -865,7 +940,7 @@ impl SceneApp {
                         selected,
                         selected_resource,
                         size,
-                        tokens,
+                        tokens: (&tokens).into(),
                         phases,
                         source_colors,
                         object_colors,

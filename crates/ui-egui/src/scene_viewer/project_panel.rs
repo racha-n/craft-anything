@@ -303,35 +303,7 @@ pub fn details(ui: &mut Ui, state: &mut State, frame: &Frame, model: &ProjectMod
     selected
 }
 
-pub fn phase_state(
-    scene: &craft_anything_formats::scene_bundle::Scene,
-    frame: &Frame,
-) -> (std::collections::BTreeSet<usize>, std::collections::BTreeMap<usize, u8>) {
-    use craft_anything_engine::tools::scene_project_tools::{Phase, PhaseState};
-    let ids = scene.resources.iter().enumerate().map(|(id, r)| (r.guid.as_str(), id)).collect::<std::collections::BTreeMap<_, _>>();
-    let mut phases = std::collections::BTreeMap::new();
-    for entry in &frame.resource_phases {
-        if let Some(id) = ids.get(entry.resource_guid.as_str())
-            && let PhaseState::Resolved { phase, .. } = entry.state
-        {
-            let phase = match phase {
-                Phase::Hidden => 0,
-                Phase::InstallActive => 1,
-                Phase::MaintainActive => 2,
-                Phase::OriginalMaterial => 3,
-            };
-            phases.insert(*id, phase);
-        }
-    }
-    let hidden = scene
-        .instances
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| !i.resources.is_empty() && i.resources.iter().all(|r| phases.get(r) == Some(&0)))
-        .map(|(id, _)| id)
-        .collect();
-    (hidden, phases)
-}
+pub use craft_anything_engine::tools::scene_presentation_tools::phase_state;
 
 #[cfg(test)]
 mod tests {

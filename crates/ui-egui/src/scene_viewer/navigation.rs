@@ -1,5 +1,5 @@
 //! Camera navigation and scene-bound sidecar client. File work runs through the engine.
-use super::{Done, SceneApp, camera::Camera};
+use super::{Done, SceneApp};
 use craft_anything_engine::{
     CallOptions, Caller,
     tools::scene_view_tools::{CameraPose, Viewpoints},
@@ -7,16 +7,6 @@ use craft_anything_engine::{
 use craft_anything_formats::scene_bundle::math;
 use egui::{Align2, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use serde_json::json;
-impl From<&Camera> for CameraPose {
-    fn from(c: &Camera) -> Self {
-        Self { target: c.target, yaw: c.yaw, pitch: c.pitch, distance: c.distance, y_up: c.y_up }
-    }
-}
-impl From<CameraPose> for Camera {
-    fn from(c: CameraPose) -> Self {
-        Self { target: c.target, yaw: c.yaw, pitch: c.pitch, distance: c.distance, y_up: c.y_up }
-    }
-}
 impl SceneApp {
     pub(super) fn viewpoints_job(&mut self, name: Option<String>, camera: Option<CameraPose>) {
         let Some(model) = &self.model else { return };
@@ -47,7 +37,7 @@ impl SceneApp {
                 )
                 .clicked()
             {
-                self.viewpoints_job(Some(self.state.planning.viewpoint_name.trim().to_owned()), Some(CameraPose::from(&self.state.camera)));
+                self.viewpoints_job(Some(self.state.planning.viewpoint_name.trim().to_owned()), Some(self.state.camera.clone()));
             }
             ui.separator();
             if self.viewpoints.is_empty() {
@@ -57,7 +47,7 @@ impl SceneApp {
                 for view in self.viewpoints.clone() {
                     ui.horizontal(|ui| {
                         if ui.button(&view.name).on_hover_text("Restore this camera pose").clicked() {
-                            self.state.camera = view.camera.clone().into();
+                            self.state.camera = view.camera.clone();
                             self.changed();
                             ui.close();
                         }
