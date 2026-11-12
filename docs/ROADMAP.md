@@ -2498,7 +2498,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [ ] Stream compressed video frames without a staged AVI before increasing clip length or render budgets.
 - [x] Extend CSV report export to explicit metadata-only paths without requiring a drawable scene. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Clarify geometry-visibility wording in metadata-only controls, which do not inspect or display a model.
-- [ ] Add readable displayed-clock CSV date columns and reusable report templates while preserving raw source values.
+- [ ] Add readable displayed-clock CSV date columns and reusable report templates while preserving raw source values. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add docking/named workspaces and saved searches before enabling their remaining grey commands.
 - [ ] Resolve absent source task display IDs in the admitted real-project case; keep the inspector explicitly unresolved until validated.
 - [ ] Validate remaining material channels, source-opacity conversion, texture sampling and project-wide profile modifiers before claiming native parity.
