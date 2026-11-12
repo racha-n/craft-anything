@@ -2487,6 +2487,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [x] Provide a familiar ribbon planning workspace with linked task/Gantt rows, a resource navigator,
       3D view and properties inspector; verify real-project rendering and selection — claimed: Codex,
       branch `feature/r3.14-scene-bundle-viewport`. See `docs/planning-workspace.md`.
+- [ ] Build a bounded, source-bound native SP scalar writer with untouched-section preservation and a separate native reopen acceptance gate. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Implement native project creation/saving and schedule import/export before enabling the grey File commands.
 - [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
