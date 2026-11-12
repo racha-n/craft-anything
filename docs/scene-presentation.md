@@ -38,7 +38,7 @@ video holds the endpoint for up to one frame interval. Limits: 1-30 fps, 2-900 f
 2-1600 pixels per dimension, 512 MiB and a 15-minute render deadline. Lower resolution,
 fps or duration when the uncompressed-size check refuses the request. Selection highlights
 and UI overlays are omitted; current colour, visibility and 4D preview policies are retained.
-Compressed MP4 remains disabled and visible as future work.
+MP4 is available separately through the optional local encoder described below.
 
 `formats_scene_video_export` provides the same operation headlessly. It validates the
 output plan before GPU creation, stages the video privately and publishes new files without
@@ -46,6 +46,39 @@ replacement. A cancelled render does not publish the staged AVI. If manifest pub
 fails after the video link succeeds, the error preserves that AVI and identifies the partial
 publication. A compatible graphics adapter is required; initialization, submission and
 readback waits are bounded. AVI layout follows the [Microsoft RIFF/AVI reference](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference).
+
+## Compressed MP4
+
+Choose MP4 video on 4D Review, or select Compressed MP4 in the presentation window.
+Check MP4 encoder verifies a local FFmpeg build with libx264. The optional executable
+field overrides `CRAFT_ANYTHING_FFMPEG`, then `ffmpeg` on PATH is used. Nothing is downloaded.
+The helper only receives generated video files; the source project is not passed to it.
+`formats_scene_mp4_encoder` provides the same check headlessly; `formats_scene_mp4_export`
+uses the same camera/focus/render options as AVI. Existing saved UI state defaults to AVI.
+
+Export uses H.264 CRF18, yuv420p and faststart with two encoder threads. Width and height
+must be even; there is no automatic crop or resize. MP4 reduces the final file size but
+retains the 512 MiB staged AVI and 900-frame rendering budget. Allow additional temporary
+disk space for decoding to RGBA (at most about 683 MiB); staging is removed when the job ends.
+Streaming longer clips is tracked future work.
+
+All processes run through the platform owner, with closed stdin, capped stdout/stderr,
+local-file-only input protocols, cancellation and process-group termination. Probe calls
+have 10-second deadlines; encoding has 300 seconds and verification decoding 120 seconds.
+Idle deadlines are the smaller of the wall deadline and 120 seconds.
+No shell is used. A missing/incompatible encoder, odd dimensions, failed decode or cancelled
+job returns a recoverable error before publication. Outputs refuse replacement. Manifest
+publication can still fail after the video link succeeds; preserve that partial output and
+choose a new filename, as with AVI.
+
+The version-2 MP4 manifest records the encoder version and fixed recipe, encoded file
+hash/size, pre-encode reference hashes and every decoded RGBA hash. H.264 is lossy: these
+two sets of pixel hashes need not match. Decoding must produce exactly the planned number
+and size of frames before publication. Frame hashes permit later checks with the same decoder;
+different decoder versions may round YUV conversion differently. Version 1 AVI manifests
+remain unchanged. This is a new output schema, not an in-place migration of existing files.
+The recipe follows the [FFmpeg encoding documentation](https://ffmpeg.org/ffmpeg.html)
+and [H.264 encoder options](https://ffmpeg.org/ffmpeg-codecs.html).
 
 ## Reports
 

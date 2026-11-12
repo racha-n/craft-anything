@@ -33,13 +33,6 @@ pub struct FutureCommand {
     pub reason: &'static str,
 }
 pub const FUTURE_COMMANDS: &[FutureCommand] = &[
-    FutureCommand {
-        tab: Tab::Review,
-        group: "Presentation",
-        icon: "download",
-        label: "Compressed MP4",
-        reason: "Planned: compressed video encoding. Lossless AVI export is available.",
-    },
     FutureCommand { tab: Tab::File, group: "File editing", icon: "file", label: "New project", reason: "Planned: create and write a new project." },
     FutureCommand {
         tab: Tab::File,
@@ -370,6 +363,11 @@ impl SceneApp {
                                 self.state.presentation.show = true;
                             }
                             if command(ui, "download", "Export video", loaded) {
+                                self.state.presentation.show = true;
+                            }
+                            if command(ui, "download", "MP4 video", loaded) {
+                                self.state.presentation.mp4 = true;
+                                self.set_video_extension();
                                 self.state.presentation.show = true;
                             }
                         });

@@ -4,6 +4,7 @@ pub mod avi;
 pub mod camera;
 pub mod draw_plan;
 pub mod gpu;
+pub mod mp4;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Palette {

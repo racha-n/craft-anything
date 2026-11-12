@@ -6,6 +6,28 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Compressed project video (R3.14)
+
+MP4 video on 4D Review and the shared presentation panel use an optional local FFmpeg
+libx264 encoder. Two headless tools check capabilities and export H.264 CRF18/yuv420p
+with faststart. The source project never goes to the encoder; only privately rendered AVI
+is used. Even dimensions, closed stdin, bounded wall/idle deadlines, capped logs, cancellation
+and no-clobber publication apply. Final MP4 files are smaller; the 512 MiB staged AVI and
+900-frame render limits remain. A version-2 manifest adds encoder/recipe identity, encoded
+file hash and every decoded RGBA hash, alongside the unchanged pre-encode reference hashes.
+Lossy decoded pixels are not claimed to equal the references. AVI version 1 is unchanged.
+
+Follow-up validation reran all five library suites (1,750 passed, 10 intentionally ignored)
+and seven relevant integration harnesses (17 default cases plus seven explicitly enabled
+cases: six GPU and one real-codec case). All passed. Two admitted private projects exercised
+encoder checking and MP4 export through actual UI controls. Independent OpenCV and separate
+FFmpeg decodes verified all frames, dimensions, fps, hashes, random seeking and faststart.
+The two three-frame fixtures were about 79 and 136 times smaller than AVI; measured RGB
+error and PSNR remain fixture-specific. Both version-2 manifests passed schema validation.
+Formatting, all-target clippy, layers, locks, tools and secrets passed. The earlier full
+250-harness integration matrix below was not repeated for this bounded follow-up.
+Streaming longer clips without a staged AVI remains tracked future work.
+
 ### Project audit, 4D presentation and CSV reports (R3.14)
 
 The desktop and headless exporter share the native GPU renderer, camera, texture decoder
@@ -35,7 +57,7 @@ OpenCV decoding verified all three source-time frames, hashes and random seeking
 independent CSV parser verified row counts, file hashes and separate subtotals. Four output
 schemas validated. All-target clippy, formatting, layers, locks, tools and secrets passed.
 Source parser/analysis crates were not changed. See [presentation details](scene-presentation.md).
-Compressed MP4, formatted templates and metadata-only path report export remain future work.
+Formatted templates and metadata-only path report export remain future work.
 
 ### Planning workspace for project viewing (R3.14)
 
@@ -43,7 +65,7 @@ The project viewer has a light desktop planning layout with a blue ribbon,
 resource navigator, aligned task/Gantt rows above the 3D view and a properties
 inspector. Task selection inspects source values without changing visibility;
 isolation remains an explicit action. Compact layout is still available.
-Remaining unsupported editing, exchange, compressed video, report-template and
+Remaining unsupported editing, exchange, report-template and
 window-management commands are visibly disabled with explanations; their backlog is
 listed in [planning-workspace.md](planning-workspace.md). The source project remains
 read only. Rendering and interaction checks are recorded in the local interface

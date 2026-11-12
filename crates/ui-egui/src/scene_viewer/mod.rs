@@ -245,6 +245,8 @@ impl SceneApp {
                             } else {
                                 self.status = "No saved animation for this model.".into();
                             }
+                        } else if tool == "formats_scene_mp4_encoder" {
+                            self.status = format!("MP4 encoder ready: {}", output["result"]["encoder_version"].as_str().unwrap_or("libx264 available"));
                         } else if tool == "formats_project_audit" {
                             self.presentation_audit = output.get("result").cloned();
                         } else {

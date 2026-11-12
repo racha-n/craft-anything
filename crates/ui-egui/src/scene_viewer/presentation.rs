@@ -18,6 +18,8 @@ pub struct State {
     pub width: u32,
     pub height: u32,
     pub video_path: String,
+    pub mp4: bool,
+    pub encoder_path: String,
     pub report_dir: String,
     pub show: bool,
     pub show_reports: bool,
@@ -36,6 +38,8 @@ impl Default for State {
             width: 640,
             height: 360,
             video_path: String::new(),
+            mp4: false,
+            encoder_path: String::new(),
             report_dir: String::new(),
             show: false,
             show_reports: false,
@@ -113,13 +117,25 @@ impl SceneApp {
         self.state.presentation.keyframes.push(Keyframe { seconds, camera: self.state.camera.clone(), focus: self.state.project.focus });
         self.state.presentation.next_seconds = seconds + 2.;
     }
+    pub(super) fn set_video_extension(&mut self) {
+        if !self.state.presentation.video_path.is_empty() {
+            let extension = if self.state.presentation.mp4 { "mp4" } else { "avi" };
+            self.state.presentation.video_path =
+                std::path::Path::new(&self.state.presentation.video_path).with_extension(extension).to_string_lossy().into_owned();
+        }
+    }
     fn pick_export(&mut self, video: bool) {
         if self.jobs.busy() {
             return;
         }
+        let mp4 = self.state.presentation.mp4;
         self.jobs.spawn("Choose export location", true, move |_| {
             let path = if video {
-                rfd::FileDialog::new().add_filter("Lossless AVI video", &["avi"]).set_file_name("project-video.avi").save_file()
+                if mp4 {
+                    rfd::FileDialog::new().add_filter("Compressed MP4 video", &["mp4"]).set_file_name("project-video.mp4").save_file()
+                } else {
+                    rfd::FileDialog::new().add_filter("Lossless AVI video", &["avi"]).set_file_name("project-video.avi").save_file()
+                }
             } else {
                 rfd::FileDialog::new().set_file_name("project-report").save_file()
             };
@@ -166,9 +182,11 @@ impl SceneApp {
  if ui.add_enabled(valid,egui::Button::new(if self.state.presentation.playing{"Pause path"}else{"Play path"})).clicked(){self.state.project.playing=false;self.state.presentation.playing= !self.state.presentation.playing;self.presentation_tick=std::time::Instant::now();if path.as_ref().is_some_and(|p|self.state.presentation.seconds>=p.duration()){self.state.presentation.seconds=0.;}}
  });if let Some(a)=&path{let duration=a.duration().max(0.01);if ui.add(egui::Slider::new(&mut self.state.presentation.seconds,0.0..=duration).text("Path time")).changed()&&let Ok(k)=a.sample(self.state.presentation.seconds){self.state.camera=k.camera;self.state.project.focus=k.focus;self.state.project.mode=project_panel::Mode::Schedule;self.changed();}
 if let Err(e)=a.validate(){ui.small(e);}}
- ui.separator();ui.horizontal(|ui|{ui.label("AVI output");ui.text_edit_singleline(&mut self.state.presentation.video_path);if ui.button("Browse video").clicked(){self.pick_export(true);}});ui.horizontal(|ui|{ui.label("Width");ui.add(egui::DragValue::new(&mut self.state.presentation.width).range(2..=1600));ui.label("Height");ui.add(egui::DragValue::new(&mut self.state.presentation.height).range(2..=1600));ui.label("FPS");ui.add(egui::DragValue::new(&mut self.state.presentation.fps).range(1..=30));});
- if ui.add_enabled(valid&&!self.jobs.busy()&&!self.state.presentation.video_path.is_empty(),egui::Button::new("Export AVI")).clicked()&&let Some(a)=path{let params=json!({"scene_id":a.scene_id,"animation":a,"output_path":self.state.presentation.video_path,"fps":self.state.presentation.fps,"size":[self.state.presentation.width,self.state.presentation.height],"options":self.options(ui)});self.presentation_call("formats_scene_video_export",params);}
- ui.add_enabled(false,egui::Button::new("Compressed MP4 (planned)"));ui.small("Lossless AVI: larger files, maximum 512 MiB / 900 frames. Export uses current visibility, colour and 4D preview settings; UI overlays and selection highlights are omitted. The last keyframe is included.");
+ ui.separator();if ui.checkbox(&mut self.state.presentation.mp4, "Compressed MP4").changed(){self.set_video_extension();}
+ if self.state.presentation.mp4 {ui.horizontal(|ui|{ui.label("FFmpeg executable");ui.text_edit_singleline(&mut self.state.presentation.encoder_path);if ui.add_enabled(!self.jobs.busy(),egui::Button::new("Check MP4 encoder")).clicked(){self.presentation_call("formats_scene_mp4_encoder",json!({"encoder_path":self.state.presentation.encoder_path}));}});ui.small("Leave blank to use the configured encoder or PATH. H.264 is lossy; even dimensions required.");}
+ ui.horizontal(|ui|{ui.label(if self.state.presentation.mp4 {"MP4 output"} else {"AVI output"});ui.text_edit_singleline(&mut self.state.presentation.video_path);if ui.button("Browse video").clicked(){self.pick_export(true);}});ui.horizontal(|ui|{ui.label("Width");ui.add(egui::DragValue::new(&mut self.state.presentation.width).range(2..=1600));ui.label("Height");ui.add(egui::DragValue::new(&mut self.state.presentation.height).range(2..=1600));ui.label("FPS");ui.add(egui::DragValue::new(&mut self.state.presentation.fps).range(1..=30));});
+ if ui.add_enabled(valid&&!self.jobs.busy()&&!self.state.presentation.video_path.is_empty(),egui::Button::new(if self.state.presentation.mp4 {"Export MP4"} else {"Export AVI"})).clicked()&&let Some(a)=path{let params=json!({"scene_id":a.scene_id,"animation":a,"output_path":self.state.presentation.video_path,"fps":self.state.presentation.fps,"size":[self.state.presentation.width,self.state.presentation.height],"options":self.options(ui),"encoder_path":self.state.presentation.encoder_path});let tool=if self.state.presentation.mp4 {"formats_scene_mp4_export"}else{"formats_scene_video_export"};self.presentation_call(tool,params);}
+ ui.small("Both formats retain the maximum 512 MiB staged AVI / 900 frame rendering budget. MP4 reduces final file size. Export uses current visibility, colour and 4D preview settings; UI overlays and selection highlights are omitted. The last keyframe is included.");
  });
         self.state.presentation.show = show;
         let mut show = self.state.presentation.show_reports;

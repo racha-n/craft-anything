@@ -36,7 +36,6 @@ otherwise implemented commands and is distinguished from a missing capability.
 | Plan | New task, hierarchy editing, links, rescheduling, critical path, calendar editing, baselines |
 | Resources | New resources, assignment editing, resource wizard, appearance-profile editing |
 | 3D | Import/export models, edit transforms and materials |
-| 4D Review | Compressed MP4 encoding (lossless AVI is available) |
 | Project Controls | Cost editing, progress entry, time-series cost charts |
 | Reports | Formatted/reusable report templates (CSV reports are available) |
 | Windows / Navigator | Docking, named workspaces and saved searches |
@@ -89,3 +88,7 @@ Resource ancestry and native display IDs are never invented.
 
 Camera animation, Export video, Schedule report and Cost report are active for a loaded
 project. Source audit is available on 3D/Navigator. See [the workflow and format limits](scene-presentation.md).
+
+MP4 video on 4D Review opens the shared presentation panel. Check MP4 encoder verifies
+a local FFmpeg/libx264 build; Export MP4 writes a new compressed video with a version-2
+manifest and decoded-frame checks. AVI remains available. See [video details](scene-presentation.md).

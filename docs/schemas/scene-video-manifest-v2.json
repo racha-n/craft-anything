@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Compressed project video manifest",
+  "required": [
+    "version",
+    "scene_id",
+    "source_sha256",
+    "format",
+    "size",
+    "fps",
+    "frame_count",
+    "animation",
+    "options",
+    "frames",
+    "encoder_version",
+    "encoding",
+    "pixel_policy"
+  ],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "format": {
+      "const": "MP4 H.264 lossy yuv420p"
+    },
+    "size": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 1600,
+        "multipleOf": 2
+      }
+    },
+    "fps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "frame_count": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 900
+    },
+    "animation": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "title": "Scene camera/focus animation version 1",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "scene_id",
+        "keyframes"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "scene_id": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "keyframes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 64,
+          "description": "First seconds must be zero, subsequent times strictly increase, up axis identical; enforced by engine.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "seconds",
+              "camera",
+              "focus"
+            ],
+            "properties": {
+              "seconds": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 600
+              },
+              "camera": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "target",
+                  "yaw",
+                  "pitch",
+                  "distance",
+                  "y_up"
+                ],
+                "properties": {
+                  "target": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {
+                      "type": "number",
+                      "minimum": -1e+18,
+                      "maximum": 1e+18
+                    }
+                  },
+                  "yaw": {
+                    "type": "number",
+                    "minimum": -1000000.0,
+                    "maximum": 1000000.0
+                  },
+                  "pitch": {
+                    "type": "number",
+                    "minimum": -1.5707963267948966,
+                    "maximum": 1.5707963267948966
+                  },
+                  "distance": {
+                    "type": "number",
+                    "minimum": 1e-06,
+                    "maximum": 100000000000000.0
+                  },
+                  "y_up": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "focus": {
+                "type": "integer",
+                "minimum": -9223372036854775808,
+                "maximum": 9223372036854775807
+              }
+            }
+          }
+        }
+      }
+    },
+    "options": {
+      "type": "object"
+    },
+    "frames": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 900,
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "seconds",
+          "focus",
+          "camera",
+          "rgba_sha256",
+          "draw"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "focus": {
+            "type": "integer"
+          },
+          "camera": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "target",
+              "yaw",
+              "pitch",
+              "distance",
+              "y_up"
+            ],
+            "properties": {
+              "target": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number",
+                  "minimum": -1e+18,
+                  "maximum": 1e+18
+                }
+              },
+              "yaw": {
+                "type": "number",
+                "minimum": -1000000.0,
+                "maximum": 1000000.0
+              },
+              "pitch": {
+                "type": "number",
+                "minimum": -1.5707963267948966,
+                "maximum": 1.5707963267948966
+              },
+              "distance": {
+                "type": "number",
+                "minimum": 1e-06,
+                "maximum": 100000000000000.0
+              },
+              "y_up": {
+                "type": "boolean"
+              }
+            }
+          },
+          "rgba_sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
+          },
+          "draw": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "encoder_version": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "pixel_policy": {
+      "type": "string"
+    },
+    "encoding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recipe",
+        "bytes",
+        "sha256",
+        "decoded_rgba_sha256"
+      ],
+      "properties": {
+        "recipe": {
+          "const": "h264-crf18-yuv420p-faststart-v1"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "decoded_rgba_sha256": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 900,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

@@ -102,6 +102,13 @@ struct VideoRequest {
     fps: u32,
     #[serde(default)]
     options: RenderOptions,
+    #[serde(default)]
+    encoder_path: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EncoderRequest {
+    encoder_path: Option<String>,
 }
 fn default_size() -> [u32; 2] {
     [640, 360]
@@ -154,6 +161,28 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<VideoRequest>,
             video,
+        ),
+        spec(
+            "formats_scene_mp4_encoder",
+            "Check MP4 encoder",
+            "Check a local FFmpeg executable for libx264 support with bounded process deadlines. Empty path uses CRAFT_ANYTHING_FFMPEG or PATH.",
+            "Check whether compressed video export is available.",
+            Toolset::Formats,
+            Effects::NATIVE_EVIDENCE,
+            Requires::Nothing,
+            schema_of::<EncoderRequest>,
+            encoder,
+        ),
+        spec(
+            "formats_scene_mp4_export",
+            "Export a compressed project video",
+            "Render the shared camera/focus path, encode H.264 CRF18 yuv420p MP4 using local FFmpeg, decode-check every frame, and publish a new video with a version-2 manifest. Even dimensions; the 512 MiB staged AVI budget still applies. No existing files replaced.",
+            "Export a smaller video for sharing.",
+            Toolset::Formats,
+            w.union(Effects::LAUNCHES_PROCESS),
+            Requires::Nothing,
+            schema_of::<VideoRequest>,
+            mp4_video,
         ),
         spec(
             "formats_project_report_export",
@@ -361,7 +390,20 @@ fn new_path(raw: &str) -> Result<PathBuf, ToolError> {
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+fn encoder(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: EncoderRequest = parse_params(params)?;
+    check(ctx)?;
+    let program = scene_render::mp4::program(p.encoder_path.as_deref())?;
+    let version = scene_render::mp4::probe(&program, &ctx.cancel)?;
+    Ok(ToolOutput::Value(json!({"version":1,"available":true,"encoder_version":version,"recipe":scene_render::mp4::RECIPE})))
+}
 fn video(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    video_format(ctx, params, false)
+}
+fn mp4_video(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    video_format(ctx, params, true)
+}
+fn video_format(ctx: &mut Ctx<'_>, params: Value, mp4: bool) -> Result<ToolOutput, ToolError> {
     let p: VideoRequest = parse_params(params.clone())?;
     let s = loaded(ctx, &p.scene_id)?;
     if p.animation.scene_id != p.scene_id {
@@ -370,11 +412,21 @@ fn video(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     validate_options(&s.scene, &p.options)?;
     let frames = p.animation.frame_count(p.fps).map_err(ToolError::invalid)?;
     let path = new_path(&p.output_path)?;
-    if path.extension().and_then(|x| x.to_str()).is_none_or(|x| !x.eq_ignore_ascii_case("avi")) {
-        return Err(ToolError::invalid("Lossless video export requires a new .avi filename."));
+    let extension = if mp4 { "mp4" } else { "avi" };
+    if path.extension().and_then(|x| x.to_str()).is_none_or(|x| !x.eq_ignore_ascii_case(extension)) {
+        return Err(ToolError::invalid(format!("Video export requires a new .{extension} filename.")));
     }
-    let manifest_path = path.with_extension("avi.manifest.json");
+    let manifest_path = path.with_extension(format!("{extension}.manifest.json"));
     new_path(&manifest_path.to_string_lossy())?;
+    let encoder = if mp4 {
+        scene_render::mp4::validate_size(p.size)?;
+        check(ctx)?;
+        let program = scene_render::mp4::program(p.encoder_path.as_deref())?;
+        let version = scene_render::mp4::probe(&program, &ctx.cancel)?;
+        Some((program, version))
+    } else {
+        None
+    };
     let model = scene_project_tools::scene_model(ctx)?;
     let parent = path.parent().ok_or_else(|| ToolError::invalid("No output parent"))?;
     let temp = tempfile::tempdir_in(parent).map_err(|e| ToolError::io(parent.display(), e))?;
@@ -404,15 +456,32 @@ fn video(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     file.sync_all().map_err(|e| ToolError::io(staging.display(), e))?;
     drop(file);
     check(ctx)?;
-    let meta = json!({"version":1,"scene_id":p.scene_id,"source_sha256":s.scene.source_sha256,"format":"AVI RGB24 lossless","size":p.size,"fps":p.fps,"frame_count":frames,"path_duration_seconds":p.animation.duration(),"encoded_seconds":encoded_seconds,"last_frame_policy":"include last keyframe and hold for up to one frame interval","adapter":adapter,"animation":p.animation,"options":p.options,"frames":records,"native_visual_parity_verified":false});
+    let mut meta = json!({"version":1,"scene_id":p.scene_id,"source_sha256":s.scene.source_sha256,"format":"AVI RGB24 lossless","size":p.size,"fps":p.fps,"frame_count":frames,"path_duration_seconds":p.animation.duration(),"encoded_seconds":encoded_seconds,"last_frame_policy":"include last keyframe and hold for up to one frame interval","adapter":adapter,"animation":p.animation,"options":p.options,"frames":records,"native_visual_parity_verified":false});
+    let published_staging = if let Some((program, version)) = encoder {
+        ctx.report(Some(0.9), "Encoding and checking MP4 frames");
+        let compressed = temp.path().join("video.mp4");
+        let encoded = scene_render::mp4::encode(&program, &staging, &compressed, p.size, frames, &ctx.cancel)?;
+        meta["version"] = json!(2);
+        meta["format"] = json!("MP4 H.264 lossy yuv420p");
+        meta["encoder_version"] = json!(version);
+        meta["encoding"] = serde_json::to_value(encoded).map_err(|e| ToolError::invalid(e.to_string()))?;
+        meta["pixel_policy"] = json!(
+            "Frame rgba_sha256 values identify rendered pre-encode references. Decoded RGBA hashes identify lossy MP4 frames; pixel equality is not promised."
+        );
+        compressed
+    } else {
+        staging
+    };
+    check(ctx)?;
     let meta_staging = temp.path().join("manifest.json");
     craft_anything_platform::write_atomic_private(&meta_staging, &serde_json::to_vec_pretty(&meta).map_err(|e| ToolError::invalid(e.to_string()))?)?;
-    std::fs::hard_link(&staging, &path).map_err(|e| ToolError::io(path.display(), e))?;
+    std::fs::hard_link(&published_staging, &path).map_err(|e| ToolError::io(path.display(), e))?;
     std::fs::hard_link(&meta_staging, &manifest_path).map_err(|e| {
         ToolError::io(manifest_path.display(), e)
-            .with_remediation("The AVI was created, but its manifest could not be published. Preserve it and choose a new export name.")
+            .with_remediation("The video was created, but its manifest could not be published. Preserve it and choose a new export name.")
     })?;
-    let ev=builder(ctx,"formats_scene_video_export",s.subject.clone(),params).summary(format!("Exported {frames} lossless video frames")).confidence(Confidence::Derived).result(json!({"path":path,"manifest":manifest_path,"frames":frames,"encoded_seconds":encoded_seconds,"scene_id":s.scene.id,"source_sha256":s.scene.source_sha256})).limitation(Limitation::new("preview_scope","Video uses admitted renderer and 4D policies. Source-opacity, full native material parity and engineering units are not certified. Selection highlights and UI overlays are omitted.")).target_content(true).build()?;
+    let tool = if mp4 { "formats_scene_mp4_export" } else { "formats_scene_video_export" };
+    let ev=builder(ctx,tool,s.subject.clone(),params).summary(format!("Exported {frames} video frames")).confidence(Confidence::Derived).result(json!({"path":path,"manifest":manifest_path,"frames":frames,"encoded_seconds":encoded_seconds,"scene_id":s.scene.id,"source_sha256":s.scene.source_sha256})).limitation(Limitation::new("preview_scope","Video uses admitted renderer and 4D policies. Source-opacity, full native material parity and engineering units are not certified. Selection highlights and UI overlays are omitted.")).target_content(true).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 fn csv_cell(v: &Value) -> String {

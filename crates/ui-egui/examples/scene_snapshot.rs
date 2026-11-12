@@ -229,6 +229,24 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
                 decoded.iter().zip(&reference).filter(|(a, b)| a != b).count()
             ));
         }
+        if std::env::var_os("CRAFT_ANYTHING_FFMPEG").is_some() {
+            h.get_by_label("Compressed MP4").click();
+            h.run_steps(2);
+            h.get_by_label("Check MP4 encoder").click();
+            settle(&mut h)?;
+            if h.state().last_presentation_output.as_ref().and_then(|v| v["result"]["available"].as_bool()) != Some(true) {
+                return Err("MP4 encoder check failed through UI".into());
+            }
+            h.get_by_label("Export MP4").click();
+            settle(&mut h)?;
+            let m: serde_json::Value = serde_json::from_slice(&std::fs::read(output.join("project-preview.mp4.manifest.json")).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            if m["version"] != 2 || m["frames"] != manifest["frames"] || m["encoding"]["decoded_rgba_sha256"].as_array().map(Vec::len) != Some(3) {
+                return Err("MP4 reference frames or decoded checks differ from AVI path".into());
+            }
+            h.render()?.save(output.join("mp4-export-ui.png")).map_err(|e| e.to_string())?;
+            std::fs::write(output.join("mp4-verification.json"), serde_json::to_vec_pretty(&serde_json::json!({"version":1,"encoder_check_via_ui":true,"mp4_export_via_ui":true,"reference_frames_identical_to_avi":true,"decoded_frames_checked":3,"lossy_pixels_expected":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        }
         h.state_mut().state.presentation.show = false;
         h.state_mut().state.presentation.show_reports = true;
         h.state_mut().state.presentation.report_dir = output.join("csv-report").to_string_lossy().into_owned();

@@ -112,3 +112,19 @@ fn lossless_video_has_all_frames_and_no_clobber() {
     assert!(e.call("formats_scene_video_export", p, CallOptions::new(Caller::Cli)).is_err());
     assert_eq!(video, std::fs::read(path).unwrap());
 }
+
+#[test]
+fn mp4_preflight_errors_do_not_create_outputs() {
+    let (d, e, id) = setup();
+    let path = d.path().join("demo.mp4");
+    for (size, encoder) in [([33, 32], "ffmpeg"), ([32, 32], "craft-anything-missing-ffmpeg-test")] {
+        let p = json!({"scene_id":id,"animation":animation(&id),"output_path":path,"size":size,"fps":2,"encoder_path":encoder});
+        assert!(e.call("formats_scene_mp4_export", p, CallOptions::new(Caller::Cli)).is_err());
+        assert!(!path.exists());
+        assert!(!path.with_extension("mp4.manifest.json").exists());
+    }
+    std::fs::write(&path, b"preserve").unwrap();
+    let p = json!({"scene_id":id,"animation":animation(&id),"output_path":path});
+    assert!(e.call("formats_scene_mp4_export", p, CallOptions::new(Caller::Cli)).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"preserve");
+}
