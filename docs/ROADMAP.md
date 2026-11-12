@@ -2465,6 +2465,10 @@ Owner: open · Status: in progress
 ---
 
 ### R3.14 Read-only project and scene viewer
+- [ ] Finish the V2 baseline validation and retain the delivered planning interface in a reviewable commit. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [ ] Add an interactive orientation cube and persistent scene-bound saved viewpoints through headless tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [ ] Add task hierarchy folding, Gantt time navigation and explicit task/resource/object selection links; preserve absent native IDs as unknown. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+<!-- Explicit user-requested interface follow-up, 2026-11-12. -->
 Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expansion remains open)
 - [x] Add a bounded versioned scene-bundle reader and headless inspection/picking tools, with a native experimental viewport for orbit, pan, zoom, resource selection and hide/isolate. Preserve unknown units, axes and materials in the result. — claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Read the admitted project layout directly without a source application or prepared bundle; retain storage provenance and reject unsupported layouts. — claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
@@ -2473,9 +2477,26 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [x] Add conservative camera-frustum culling and measured large-scene rendering budgets, preserving picking filters and recoverable errors. — claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add admitted Install/Maintain intervals, calendar-derived dates and explicit custom-Install interval preview, with focus/playback and unresolved appearance. — claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add independently controlled Material Fixed/PerUnit cost evaluation, source quantities, working-time rates, separate direct budgets and unresolved actual costs. — claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-- [ ] Extend native appearance parity to inherited colours, textures, directional growth and transparency after independent controls; the current interval preview explicitly omits these effects. ? claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-- [ ] Independently validate engineering mesh quantities, further resource cost kinds and currency/unit conversion before admitting them. ? claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-- [ ] Validate the available independent project corpus and additional source versions; admit only observed layouts and report unsupported inputs explicitly. ? claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Decode controlled variable profile effects and expose bounded growth/opacity previews, clipping-aware picking and explicit Pause-calendar semantics; preserve unresolved native modifiers and cap geometry. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Admit the controlled outer Entities-group RGB override over inner-group and leaf RGB, preserving library fallback and source-opacity conversion as unknown. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Join bounded embedded images and planar UV candidates for an opt-in texture preview; preserve sampling, inheritance and full native material parity as unknown. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Add metadata-only schedule/cost inspection independently of geometry, recorded Fixed-expense ledgers, controlled Direct Fixed planned value and scoped paid time-resource budgets. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Independently compare world mesh measurements and expose bounded per-instance diagnostic quantities with topology/units limits. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Validate the available independent project corpus and record that no additional source version was available; reject unobserved layouts explicitly. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Provide a familiar ribbon planning workspace with linked task/Gantt rows, a resource navigator,
+      3D view and properties inspector; verify real-project rendering and selection — claimed: Codex,
+      branch `feature/r3.14-scene-bundle-viewport`. See `docs/planning-workspace.md`.
+- [ ] Implement native project creation/saving and schedule import/export before enabling the grey File commands.
+- [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands.
+- [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
+- [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
+- [ ] Add camera animation, video export and saved viewpoints before enabling the grey 4D presentation commands.
+- [ ] Add cost/progress editing and cost charts before enabling the grey Project Controls editing/analysis commands.
+- [ ] Add report generation/templates, docking/named workspaces, saved searches and an orientation cube before enabling the corresponding grey commands.
+- [ ] Resolve absent source task display IDs in the admitted real-project case; keep the inspector explicitly unresolved until validated.
+- [ ] Validate remaining material channels, source-opacity conversion, texture sampling and project-wide profile modifiers before claiming native parity.
+- [ ] Validate engineering aggregate quantities, additional expense/rate-window kinds and currency/unit conversion before admitting them.
+- [ ] Acquire independently authorized samples of additional source versions before extending the admitted version table.
 
 ---
 
