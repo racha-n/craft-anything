@@ -6,6 +6,18 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Native authoring acceptance remains open (R3.14)
+
+The expanded 4D/5D goal includes schedule/cost editing and native SP persistence. Existing
+viewer/report exports do not finish that goal. An experimental source-guarded scalar candidate
+writer is under validation; it preserves untouched section payloads and emits a versioned
+byte-change receipt. It cannot certify native reopen or recalculate dependent schedule dates.
+See [the acceptance gates and candidate contract](4d5d-completion.md). Native Save and full
+4D/5D authoring remain disabled. Isolated native persistence controls passed, but independent
+native UI editing exposed utilization-rate coordination gaps. Paired-field native acceptance
+and full validation of the latest rate changes remain outstanding; this is a checkpoint,
+not a release-ready authoring implementation.
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

@@ -2,10 +2,12 @@
 //! Pure memory parsing; schedule and cost values retain raw storage semantics.
 mod actual_expenses;
 mod definitions;
+pub mod draft;
 mod resource_tree;
 mod scene_geometry;
 mod scene_graph;
 mod scene_io;
+pub mod writer;
 use crate::{FormatError, scene_bundle};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -992,6 +994,9 @@ mod tests {
         project_with_tasks(geometry, empty_section())
     }
     fn project_with_tasks(geometry: Vec<u8>, task_data: Vec<u8>) -> Vec<u8> {
+        project_with_definitions(geometry, task_data, empty_section(), empty_section())
+    }
+    fn project_with_definitions(geometry: Vec<u8>, task_data: Vec<u8>, resources: Vec<u8>, profiles: Vec<u8>) -> Vec<u8> {
         let names = ["Tasks", "Resources", "Use Profiles", "Activity Codes", "User Fields", "Entities", "IncludeLibrary", "Calendars"];
         let mut sections = Vec::new();
         for i in 0..48 {
@@ -999,6 +1004,8 @@ mod tests {
             let payload = match name.as_str() {
                 "Entities" => geometry.clone(),
                 "Tasks" => task_data.clone(),
+                "Resources" => resources.clone(),
+                "Use Profiles" => profiles.clone(),
                 _ => empty_section(),
             };
             let mut stored = vec![1, name.len() as u8];
@@ -1079,6 +1086,242 @@ mod tests {
         assert_eq!(imported.metadata["source_sha256"], imported.source_sha256);
         assert_eq!(imported.metadata["coverage"]["assignment_resource_refs_checked"], true);
         assert!(parse_metadata(&raw, |_| false).is_err());
+    }
+    #[test]
+    fn scalar_candidate_changes_only_requested_task_bytes() {
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let original = raw.clone();
+        let source = parse_metadata(&raw, |_| true).unwrap();
+        let id = "11111111-1111-1111-1111-111111111111".to_string();
+        let edits = [
+            writer::ScalarEdit::TaskStart { task_guid: id.clone(), expected_storage: 0, value_storage: 123456 },
+            writer::ScalarEdit::TaskDuration { task_guid: id, expected_storage: 0, value_storage: 42 },
+        ];
+        let candidate = writer::candidate(&raw, &source.source_sha256, &edits, |_| true).unwrap();
+        assert_eq!(raw, original);
+        assert_eq!(candidate.receipt.changes.len(), 2);
+        assert_eq!(candidate.receipt.sections.len(), 48);
+        assert!(candidate.receipt.sections.iter().filter(|s| s.name != "Tasks").all(|s| s.stored_bytes_preserved));
+        assert!(!candidate.receipt.native_reopen_verified);
+        assert!(!candidate.receipt.derived_schedule_consistency_verified);
+        let before = container(&raw, &mut |_| true).unwrap();
+        let after = container(&candidate.bytes, &mut |_| true).unwrap();
+        let mut expected = before.decoded.get("Tasks").unwrap().clone();
+        for (change, value) in candidate.receipt.changes.iter().zip([123456u64, 42u64]) {
+            expected[change.decoded_tasks_offset..change.decoded_tasks_offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(after.decoded.get("Tasks").unwrap(), &expected);
+        parse_metadata(&candidate.bytes, |_| true).unwrap();
+    }
+    #[test]
+    fn draft_transactions_rebuild_bytes_and_keep_failed_edits_atomic() {
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let hash = parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let mut draft = draft::Draft::open(raw.clone(), &hash, |_| true).unwrap();
+        let duration = |expected, value| writer::ScalarEdit::TaskDuration {
+            task_guid: "11111111-1111-1111-1111-111111111111".into(),
+            expected_storage: expected,
+            value_storage: value,
+        };
+        let read_duration = |draft: &draft::Draft| {
+            let raw = draft.bytes(|_| true).unwrap();
+            let evidence = inspect_container(container(&raw, &mut |_| true).unwrap(), String::new(), false, &mut |_| true).unwrap();
+            evidence.tasks[0].duration_storage_scalar
+        };
+        draft.apply(0, &[duration(0, 42)], |_| true).unwrap();
+        assert_eq!(read_duration(&draft), 42);
+        let changed = draft.bytes(|_| true).unwrap();
+        // One valid edit followed by a stale one must not publish either edit.
+        let start = writer::ScalarEdit::TaskStart { task_guid: "11111111-1111-1111-1111-111111111111".into(), expected_storage: 0, value_storage: 123456 };
+        assert!(draft.apply(1, &[start, duration(0, 99)], |_| true).is_err());
+        assert_eq!(draft.revision, 1);
+        assert_eq!(draft.bytes(|_| true).unwrap(), changed);
+        assert!(draft.apply(0, &[duration(42, 99)], |_| true).is_err());
+        assert!(draft.apply(1, &[duration(42, 99)], |_| false).is_err());
+        assert_eq!(draft.revision, 1);
+        draft.apply(1, &[duration(42, 99)], |_| true).unwrap();
+        assert_eq!(read_duration(&draft), 99);
+        draft.undo(2).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), changed);
+        draft.redo(3).unwrap();
+        assert_eq!(read_duration(&draft), 99);
+        draft.apply(4, &[duration(99, 0)], |_| true).unwrap();
+        assert!(!draft.is_dirty());
+        assert_eq!(draft.bytes(|_| true).unwrap(), raw);
+        assert_eq!(draft.candidate(|_| true).unwrap().bytes, raw);
+        draft.undo(5).unwrap();
+        assert!(draft.is_dirty());
+        assert_eq!(read_duration(&draft), 99);
+        draft.apply(6, &[duration(99, 7)], |_| true).unwrap();
+        assert!(!draft.can_redo());
+        assert_eq!(read_duration(&draft), 7);
+        assert!(draft.apply(7, &[], |_| true).is_err());
+    }
+    #[test]
+    fn scalar_candidate_rejects_stale_ambiguous_and_cancelled_requests() {
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let hash = parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let edit = writer::ScalarEdit::TaskDuration { task_guid: "11111111-1111-1111-1111-111111111111".into(), expected_storage: 0, value_storage: 42 };
+        assert!(writer::candidate(&raw, &"0".repeat(64), std::slice::from_ref(&edit), |_| true).is_err());
+        let noop = writer::candidate(&raw, &hash, &[], |_| true).unwrap();
+        assert_eq!(noop.bytes, raw);
+        assert!(noop.receipt.changes.is_empty());
+        assert!(noop.receipt.sections.iter().all(|s| s.stored_bytes_preserved));
+        assert!(writer::candidate(&raw, &hash, &[edit.clone(), edit.clone()], |_| true).is_err());
+        assert!(writer::candidate(&raw, &hash, std::slice::from_ref(&edit), |_| false).is_err());
+        let stale = writer::ScalarEdit::TaskDuration { task_guid: "11111111-1111-1111-1111-111111111111".into(), expected_storage: 1, value_storage: 42 };
+        assert!(writer::candidate(&raw, &hash, &[stale], |_| true).is_err());
+        let unknown = writer::ScalarEdit::TaskDuration { task_guid: "absent".into(), expected_storage: 0, value_storage: 42 };
+        assert!(writer::candidate(&raw, &hash, &[unknown], |_| true).is_err());
+        assert!(writer::candidate(&raw[..100], &hash, &[edit], |_| true).is_err());
+    }
+    #[test]
+    fn coordinated_quantity_and_utilization_patch_is_atomic_and_preserves_opaque_data() {
+        // Fully synthetic resource/profile records: no native project, local paths or author data.
+        fn empty_list(raw: &mut Vec<u8>) {
+            raw.extend(OPEN);
+            raw.extend(0u32.to_le_bytes());
+            raw.extend(CLOSE);
+        }
+        fn guid_list(raw: &mut Vec<u8>) {
+            raw.extend([0xd0, 0xbc, 0xa1, 0x06]);
+            raw.extend(0u32.to_le_bytes());
+            raw.extend([0x2c, 0x57, 0xd9, 0xda]);
+        }
+        let mut resources = vec![0; 24];
+        resources.extend(OPEN);
+        resources.extend(1u32.to_le_bytes());
+        resources.extend([0x31, 0x5c, 0xa8, 0x57]);
+        resources.extend([0; 8]);
+        resources.extend([0x33; 16]);
+        resources.extend([255, 254, 255, 1, b'M', 0]);
+        resources.extend([255, 254, 255, 0]);
+        resources.extend([0; 32]);
+        guid_list(&mut resources);
+        resources.extend([0, 0, 0, 0, 4, 0, 0, 0]);
+        empty_list(&mut resources);
+        resources.extend([0; 20]);
+        resources.extend([255, 254, 255, 0]);
+        resources.push(0);
+        resources.extend([255, 254, 255, 0, 255, 254, 255, 0]);
+        empty_list(&mut resources);
+        resources.extend([0; 31]);
+        guid_list(&mut resources);
+        resources.extend([0; 5]);
+        guid_list(&mut resources);
+        resources.extend([0; 16]);
+        resources.extend([0xad, 0xe2, 0xb3, 0x4c]);
+        resources.extend([0; 4]);
+        resources.extend(CLOSE);
+        let mut profiles = vec![0; 24];
+        profiles.extend(OPEN);
+        profiles.extend(1u32.to_le_bytes());
+        profiles.extend([0xc1, 0xcf, 0xd6, 0xe8]);
+        profiles.extend([0; 8]);
+        profiles.extend([0x22; 16]);
+        profiles.extend([255, 254, 255, 0]);
+        let mut tail = vec![0u8; 247];
+        tail[2..6].copy_from_slice(&1u32.to_le_bytes());
+        for at in [6, 69, 176] {
+            tail[at..at + 4].copy_from_slice(&[0x10, 0x48, 0x69, 0x23]);
+            tail[at + 59..at + 63].copy_from_slice(&[0x6c, 0x4a, 0x92, 0x90]);
+        }
+        tail[132..136].copy_from_slice(OPEN);
+        tail[140..144].copy_from_slice(CLOSE);
+        tail[239..243].copy_from_slice(&[0x3d, 0xc8, 0xb0, 0x03]);
+        profiles.extend(tail);
+        profiles.extend(CLOSE);
+        let mut task_data = metadata_task_section(false);
+        task_data[65..69].copy_from_slice(&1u32.to_le_bytes());
+        let mut assignment = [0u8; 235];
+        assignment[..4].copy_from_slice(&[0x99, 0xd8, 0x23, 0x46]);
+        assignment[12..28].fill(0x22);
+        assignment[131..147].fill(0x33);
+        assignment[163..171].copy_from_slice(&5f64.to_le_bytes());
+        assignment[171..179].copy_from_slice(&(500f64 / 3.).to_le_bytes());
+        for at in [179, 187, 195] {
+            assignment[at..at + 8].copy_from_slice(&f64::NAN.to_le_bytes());
+        }
+        task_data.splice(69..69, assignment);
+        let raw = project_with_definitions(empty_section(), task_data, resources, profiles);
+        let source = parse_metadata(&raw, |_| true).unwrap();
+        let quantity = writer::ScalarEdit::AssignmentPlannedUnits {
+            task_guid: "11111111-1111-1111-1111-111111111111".into(),
+            assignment_ordinal: 0,
+            resource_guid: "33333333-3333-3333-3333-333333333333".into(),
+            profile_guid: "22222222-2222-2222-2222-222222222222".into(),
+            expected_storage: 5.,
+            value_storage: 7.5,
+        };
+        let rate = writer::ScalarEdit::AssignmentPlannedRate {
+            task_guid: "11111111-1111-1111-1111-111111111111".into(),
+            assignment_ordinal: 0,
+            resource_guid: "33333333-3333-3333-3333-333333333333".into(),
+            profile_guid: "22222222-2222-2222-2222-222222222222".into(),
+            expected_storage: 500. / 3.,
+            value_storage: 250.,
+        };
+        let paired = writer::candidate(&raw, &source.source_sha256, &[quantity.clone(), rate.clone()], |_| true).unwrap();
+        assert_eq!(paired.receipt.changes.iter().map(|c| c.decoded_tasks_offset).collect::<Vec<_>>(), vec![232, 240]);
+        assert!(paired.receipt.sections.iter().filter(|s| s.name != "Tasks").all(|s| s.stored_bytes_preserved));
+        let parsed = parse_metadata(&paired.bytes, |_| true).unwrap();
+        assert_eq!(parsed.metadata["tasks"][0]["assignments"][0]["planned_units"], 7.5);
+        assert_eq!(parsed.metadata["tasks"][0]["assignments"][0]["rate_storage_window"], 250.);
+        assert!(parsed.metadata["tasks"][0]["assignments"][0]["remaining_units_storage"].is_null());
+        let mut stale = rate.clone();
+        if let writer::ScalarEdit::AssignmentPlannedRate { expected_storage, .. } = &mut stale {
+            *expected_storage = 125.;
+        }
+        assert!(writer::candidate(&raw, &source.source_sha256, &[quantity.clone(), stale], |_| true).is_err());
+        let mut draft = draft::Draft::open(raw.clone(), &source.source_sha256, |_| true).unwrap();
+        draft.apply(0, &[quantity.clone(), rate.clone()], |_| true).unwrap();
+        let changed = draft.bytes(|_| true).unwrap();
+        draft.undo(1).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), raw);
+        draft.redo(2).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), changed);
+        for value in [f64::NAN, f64::INFINITY, -1., 1e13] {
+            let mut invalid = rate.clone();
+            if let writer::ScalarEdit::AssignmentPlannedRate { value_storage, .. } = &mut invalid {
+                *value_storage = value;
+            }
+            assert!(writer::candidate(&raw, &source.source_sha256, &[quantity.clone(), invalid], |_| true).is_err());
+        }
+    }
+    #[test]
+    fn scalar_candidate_updates_direct_fixed_cost_and_rejects_invalid_amounts() {
+        let mut tasks = metadata_task_section(false);
+        let raw = project_with_tasks(empty_section(), tasks.clone());
+        let parsed = inspect_container(container(&raw, &mut |_| true).unwrap(), String::new(), false, &mut |_| true).unwrap();
+        let at = parsed.tasks[0].name_end + 17;
+        let mut cost = vec![1];
+        cost.extend(OPEN);
+        cost.extend(1u32.to_le_bytes());
+        let mut record = vec![0; 28];
+        record[..4].copy_from_slice(&[0x9c, 0x0e, 0xe3, 0x04]);
+        record[12..28].fill(0x22);
+        cost.extend(record);
+        cost.extend([255, 254, 255, 1, b'C', 0]);
+        cost.extend(25.0f64.to_le_bytes());
+        cost.extend(1u32.to_le_bytes());
+        cost.extend([0; 16]);
+        cost.extend([0x78, 0xe2, 0x44, 0xa1, 0, 0, 0, 0]);
+        cost.extend(CLOSE);
+        tasks.splice(at..at + 1, cost);
+        let raw = project_with_tasks(empty_section(), tasks);
+        let source = parse_metadata(&raw, |_| true).unwrap();
+        let edit = |value| writer::ScalarEdit::DirectFixedAmount {
+            task_guid: "11111111-1111-1111-1111-111111111111".into(),
+            cost_guid: "22222222-2222-2222-2222-222222222222".into(),
+            expected_storage: 25.0,
+            value_storage: value,
+        };
+        let candidate = writer::candidate(&raw, &source.source_sha256, &[edit(73.5)], |_| true).unwrap();
+        let output = parse_metadata(&candidate.bytes, |_| true).unwrap();
+        assert_eq!(output.metadata["tasks"][0]["direct_costs"][0]["amount_storage"], 73.5);
+        for value in [f64::NAN, f64::INFINITY, -1.0, 1.0e13] {
+            assert!(writer::candidate(&raw, &source.source_sha256, &[edit(value)], |_| true).is_err());
+        }
     }
     #[test]
     fn metadata_only_still_rejects_missing_task_references() {

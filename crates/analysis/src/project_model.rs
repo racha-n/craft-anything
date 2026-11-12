@@ -1212,6 +1212,11 @@ fn admitted_rates(resource: &ResourceCostView) -> Result<Vec<(i64, i64, u32)>, S
     if resource.kind_storage_byte != Some(4) {
         return Err("Unsupported resource kind for Material cost formula".into());
     }
+    // Match project_rate_policy: these are declared admitted source units,
+    // not a conversion of missing or unsupported unit storage.
+    if !matches!(resource.unit_storage_byte, Some(0 | 7)) {
+        return Err("Material cost requires source unit 0 or 7; missing or unsupported units remain unresolved".into());
+    }
     if resource.rates.is_empty() {
         return Err("Resource has no decoded effective cost rates".into());
     }
@@ -1456,7 +1461,7 @@ mod tests {
             guid: "resource".into(),
             name: "Material".into(),
             kind_storage_byte: Some(4),
-            unit_storage_byte: None,
+            unit_storage_byte: Some(7),
             rates: vec![
                 RateView {
                     effective_wallclock: Some(-1),
@@ -1469,6 +1474,151 @@ mod tests {
             ],
             unresolved_reasons: vec![],
         }
+    }
+
+    // Synthetic all-days calendar using the framing already exercised by the
+    // formats calendar parser. This goes through metadata preparation rather
+    // than mutating the model's public display inventory or private caches.
+    fn material_unit_metadata(unit: Option<u8>, amount: f64, planned_units: f64) -> Value {
+        fn text(value: &str) -> Vec<u8> {
+            let mut bytes = vec![255, 254, 255, value.len() as u8];
+            bytes.extend(value.encode_utf16().flat_map(u16::to_le_bytes));
+            bytes
+        }
+        fn guid(id: u8) -> [u8; 16] {
+            let mut bytes = [0; 16];
+            bytes[0] = id;
+            bytes
+        }
+        let open = [0x7a, 0x54, 0xaf, 0x39];
+        let close = [0x16, 0xe4, 0x99, 0x6f];
+        let mut raw = vec![0; 24];
+        raw.extend(open);
+        raw.extend(1u32.to_le_bytes());
+        raw.extend([0x1d, 0x26, 0xec, 0x7f]);
+        raw.extend([0; 8]);
+        raw.extend(guid(1));
+        raw.extend(text("Calendar"));
+        raw.extend(open);
+        raw.extend(0u32.to_le_bytes());
+        raw.extend(close);
+        raw.extend([0xa9, 0x5c, 0xcd, 0x47]);
+        for _ in 0..7 {
+            raw.extend(guid(2));
+        }
+        raw.extend([0x25, 0xf2, 0x78, 0x41]);
+        raw.extend(open);
+        raw.extend(0u32.to_le_bytes());
+        raw.extend(close);
+        raw.extend(open);
+        raw.extend(1u32.to_le_bytes());
+        raw.extend([0x1d, 0xc2, 0xf4, 0xc4]);
+        raw.extend(guid(2));
+        raw.extend(text("Working"));
+        raw.extend([0; 12]);
+        raw.extend(1u32.to_le_bytes());
+        raw.extend(1u32.to_le_bytes());
+        raw.extend(86_400i64.to_le_bytes());
+        raw.extend(172_800i64.to_le_bytes());
+        raw.extend([0x19, 0x06, 0x8d, 0x63]);
+        raw.extend(0u32.to_le_bytes());
+        raw.extend(close);
+        raw.extend([0x19, 0xea, 0x70, 0x7d]);
+        raw.extend(0u32.to_le_bytes());
+        raw.extend(close);
+        raw.extend(guid(1));
+        let calendar_hex = raw.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let mut data = metadata();
+        data["raw_sections"] = json!({"Calendars":{"data_hex":calendar_hex}});
+        data["tasks"][0]["assignments"] = json!([{
+            "resource_guid":"resource", "profile_guid":"profile", "planned_units":planned_units,
+            "actual_units_storage":0.5, "remaining_units_storage":2.0
+        }]);
+        data["resources"] = json!([{
+            "guid":"resource", "name":"Material", "kind_storage_byte":4,
+            "unit_storage_byte":unit,
+            "cost_storage_groups":[{"raw_header_hex":"000000000000000000000000000000000000000000000000000000000000000000000000",
+                "items":[{"description":"Rate", "amount_storage":amount, "type_storage":9}]}]
+        }]);
+        data
+    }
+    #[test]
+    fn cost_curve_samples_calendar_and_exact_effective_rate_boundary() {
+        let mut data = material_unit_metadata(Some(7), 1.25, 2.5);
+        let mut later = data["resources"][0]["cost_storage_groups"][0].clone();
+        let mut header = [0u8; 40];
+        header[28..36].copy_from_slice(&110i64.to_le_bytes());
+        later["raw_header_hex"] = json!(header.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        later["items"][0]["amount_storage"] = json!(2.5);
+        data["resources"][0]["cost_storage_groups"].as_array_mut().unwrap().push(later);
+        let model = ProjectModel::from_metadata(&data).unwrap();
+        assert_eq!((model.tasks[0].planned_start, model.tasks[0].planned_finish), (Some(100), Some(120)));
+        let curve = crate::project_curves::sample(&model, 100, 120, 3, DateMode::Planned, || false).unwrap();
+        assert_eq!(curve.samples.iter().map(|s| s.planned_value_minor).collect::<Vec<_>>(), vec![0, 156, 469]);
+        assert!(curve.samples.iter().all(|s| s.resource_forecast_minor == 469 && s.unresolved_planned_lines == 0));
+        assert!(curve.samples.iter().all(|s| s.recorded_expenses_minor.is_none()));
+        assert!(curve.samples.iter().all(|s| s.unresolved_actual_lines == 1 && s.unresolved_remaining_lines == 1));
+        assert!(!curve.native_parity_verified);
+    }
+    #[test]
+    fn material_model_admitted_units_preserve_budget_progress_and_working_planned_value() {
+        for unit in [0, 7] {
+            let data = material_unit_metadata(Some(unit), 1.25, 2.5);
+            let model = ProjectModel::from_metadata(&data).unwrap();
+            assert_eq!(model.tasks[0].planned_finish, Some(120));
+            let frame = model.evaluate(110, DateMode::Planned);
+            let line = &frame.costs.lines[0];
+            assert_eq!(
+                (line.budget_minor, line.actual_minor, line.remaining_minor, line.planned_cumulative_minor),
+                (Some(313), Some(63), Some(250), Some(156))
+            );
+            assert_eq!((line.planned_units, line.actual_units, line.remaining_units), (Some(2.5), Some(0.5), Some(2.0)));
+            assert!(frame.costs.complete);
+            assert!(!frame.native_parity_verified);
+        }
+    }
+    #[test]
+    fn material_model_unknown_units_never_produce_money_even_for_zero_inputs() {
+        for unit in [None, Some(1), Some(255)] {
+            for (amount, units) in [(1.25, 2.5), (0., 2.5), (1.25, 0.), (0., 0.)] {
+                for rate_type in [1, 9] {
+                    let mut data = material_unit_metadata(unit, amount, units);
+                    data["resources"][0]["cost_storage_groups"][0]["items"][0]["type_storage"] = json!(rate_type);
+                    let model = ProjectModel::from_metadata(&data).unwrap();
+                    assert_eq!(model.tasks[0].planned_finish, Some(120));
+                    assert_eq!(model.resources[0].unit_storage_byte, unit);
+                    let frame = model.evaluate(110, DateMode::Planned);
+                    let line = &frame.costs.lines[0];
+                    assert_eq!((line.budget_minor, line.actual_minor, line.remaining_minor, line.planned_cumulative_minor), (None, None, None, None));
+                    assert_eq!((line.planned_units, line.actual_units, line.remaining_units), (Some(units), Some(0.5), Some(2.0)));
+                    assert!(line.unresolved_reasons.iter().any(|reason| reason.contains("source unit 0 or 7")));
+                    assert_eq!(
+                        (
+                            frame.costs.unresolved_budget_lines,
+                            frame.costs.unresolved_actual_lines,
+                            frame.costs.unresolved_remaining_lines,
+                            frame.costs.unresolved_cumulative_lines
+                        ),
+                        (1, 1, 1, 1)
+                    );
+                    assert!(!frame.costs.complete);
+                }
+            }
+        }
+    }
+    #[test]
+    fn material_model_missing_unit_keeps_explicit_empty_expenses_zero_and_absent_rates_unknown() {
+        let mut data = material_unit_metadata(None, 1.25, 2.5);
+        data["resources"][0]["cost_storage_groups"][0]["items"] = json!([]);
+        let frame = ProjectModel::from_metadata(&data).unwrap().evaluate(110, DateMode::Planned);
+        let line = &frame.costs.lines[0];
+        assert_eq!((line.budget_minor, line.actual_minor, line.remaining_minor, line.planned_cumulative_minor), (Some(0), Some(0), Some(0), Some(0)));
+        assert!(line.unresolved_reasons.iter().any(|reason| reason == cost_basis::EMPTY_EXPENSE_POLICY));
+        assert!(!frame.native_parity_verified);
+        data["resources"][0]["cost_storage_groups"] = json!([]);
+        let frame = ProjectModel::from_metadata(&data).unwrap().evaluate(110, DateMode::Planned);
+        assert_eq!(frame.costs.lines[0].budget_minor, None);
+        assert!(!frame.costs.complete);
     }
     #[test]
     fn working_rate_crossing_and_focus_cumulative_exclude_nonworking_gap() {

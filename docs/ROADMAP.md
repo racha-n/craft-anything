@@ -2488,12 +2488,15 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
       3D view and properties inspector; verify real-project rendering and selection — claimed: Codex,
       branch `feature/r3.14-scene-bundle-viewport`. See `docs/planning-workspace.md`.
 - [ ] Build a bounded, source-bound native SP scalar writer with untouched-section preservation and a separate native reopen acceptance gate. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+      Native acceptance must compare coordinated assignment utilization rates: a quantity-only patch reopens but differs from the independently edited native control. Retain storage-only admission until the related fields are validated.
 - [ ] Implement native project creation/saving and schedule import/export before enabling the grey File commands.
 - [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add cost/progress editing and cost charts before enabling the grey Project Controls editing/analysis commands.
+- [ ] Enforce source-unit admission in Material evaluation and add bounded, cancellable cost-curve sampling shared by UI/CLI/MCP. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [ ] Add source-revision-bound scalar edit sessions with undo/redo, explicit candidate publication and cache isolation while native-save acceptance is pending. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Export source-hash/focus-bound task, resource, budget and actual-expense CSV reports through engine tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add optional compressed MP4 encoding with bounded cancellation and reproducible frame checks. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Stream compressed video frames without a staged AVI before increasing clip length or render budgets.

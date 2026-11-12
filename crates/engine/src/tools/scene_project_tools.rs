@@ -87,6 +87,43 @@ struct Evaluate {
     #[serde(default = "page_size")]
     limit: usize,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CurveRequest {
+    #[serde(default)]
+    path: Option<String>,
+    expected_source_sha256: String,
+    start_wallclock: i64,
+    end_wallclock: i64,
+    samples: usize,
+    #[serde(default)]
+    best_dates: bool,
+}
+fn cost_curve(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: CurveRequest = parse_params(params.clone())?;
+    let (source, model) = model(ctx, p.path.as_deref())?;
+    if !source.source_sha256.eq_ignore_ascii_case(&p.expected_source_sha256) {
+        return Err(ToolError::invalid("Project changed; reload before sampling costs."));
+    }
+    let curve = craft_anything_analysis::project_curves::sample(
+        &model,
+        p.start_wallclock,
+        p.end_wallclock,
+        p.samples,
+        if p.best_dates { craft_anything_analysis::project_model::DateMode::Best } else { craft_anything_analysis::project_model::DateMode::Planned },
+        || ctx.cancel.is_cancelled(),
+    );
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let curve = curve.map_err(ToolError::invalid)?;
+    Ok(ToolOutput::evidence(builder(ctx, "formats_project_cost_curve", source.subject.clone(), params)
+        .summary("Source-bound sampled cost curves with explicit incomplete values")
+        .confidence(Confidence::Derived)
+        .result(json!({"source":source.identity(), "curve":curve}))
+        .limitation(Limitation::new("cost_curve_policy", "Declared evaluator samples in source money context. Budgets, planned value and recorded expenses are separate; no native earned-value, currency conversion or cash-flow equivalence is asserted."))
+        .target_content(true).build()?))
+}
 #[derive(Debug, Clone, Default, serde::Serialize, Deserialize)]
 pub struct SourceSelectionLinks {
     pub scene_id: String,
@@ -128,6 +165,17 @@ fn selection_links(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolE
 }
 pub fn specs() -> Vec<ToolSpec> {
     vec![
+        spec(
+            "formats_project_cost_curve",
+            "Sample project cost curves",
+            "Sample 2..512 source-bound timeline evaluations, preserving unresolved subtotals and separating recorded expenses from planned value.",
+            "Compare costs over time.",
+            Toolset::Formats,
+            Effects::EVIDENCE.union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<CurveRequest>,
+            cost_curve,
+        ),
         spec(
             "formats_project_selection_links",
             "Link project selections",

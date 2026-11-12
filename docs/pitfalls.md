@@ -11,6 +11,18 @@ Mistakes made while building this project, what they cost, and the rule that pre
 Read this before your first change; add to it when you make a new mistake worth not repeating.
 Keep entries short: what happened, then the rule.
 
+**A native-reopened scalar patch was not equivalent to native editing.** Patching an assignment's
+planned quantity from 5 to 7.5 reopened as 7.50, while its utilization rate stayed at 1.67 units/day.
+An independent native UI edit changed that rate to 2.50; decoded Tasks differed only at the rate
+window. Compare native-edited controls and dependent fields, not just successful reopening or
+the intended field. Keep storage experiments separate from admitted authoring commands.
+
+**A cost-curve fixture omitted required source context.** A model without metadata schema 4
+was refused before sampling; another fixture expected planned value without a decoded calendar.
+Use versioned metadata and a real synthetic calendar for expected schedule-derived money.
+Also test that an absent calendar leaves planned value unresolved while a dated expense ledger
+remains separately usable. Do not weaken admission to make an incomplete fixture pass.
+
 ## Git and pull requests
 
 **Work began before its roadmap claim, on a branch without the required prefix.** Renaming the
