@@ -1,7 +1,10 @@
 //! Local GPU and interaction verification: scene_snapshot <scene.json> <output-directory>.
 #![forbid(unsafe_code)]
 use craft_anything_ui_egui::scene_viewer::SceneApp;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -50,7 +53,29 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
     h.render()?.save(output.join("scene-fit.png")).map_err(|e| e.to_string())?;
     let model = h.state().model.clone().ok_or("No scene loaded")?;
     let scene = &model.scene;
+    if h.state().state.planning.enabled
+        && let Some(task) = model.metadata.get("tasks").and_then(|v| v.as_array()).and_then(|v| v.first())
+        && let Some(guid) = task.get("guid").and_then(|v| v.as_str())
+    {
+        h.get_by_label(&format!("Task {guid}")).click();
+        settle(&mut h)?;
+        if h.state().state.planning.selected_task.as_deref() != Some(guid) {
+            return Err("Task/Gantt selection did not reach the inspector".into());
+        }
+        h.render()?.save(output.join("planning-task-properties.png")).map_err(|e| e.to_string())?;
+        h.state_mut().state.planning.selected_task = None;
+    }
     let initial_draw = h.state().draw_stats().map(|(s, ms)| serde_json::json!({"draw":s,"elapsed_ms":ms}));
+    if h.state().state.planning.enabled {
+        h.state_mut().state.planning.tab = craft_anything_ui_egui::scene_viewer::planning::Tab::File;
+        h.step();
+        if !h.get_by_label("Save project").accesskit_node().is_disabled() {
+            return Err("A future editing command was enabled".into());
+        }
+        h.render()?.save(output.join("planning-file-future.png")).map_err(|e| e.to_string())?;
+        h.state_mut().state.planning.tab = craft_anything_ui_egui::scene_viewer::planning::Tab::Plan;
+        h.step();
+    }
     // Aim through a real triangle centroid rather than assuming screen centre contains geometry.
     let instance = scene.instances.iter().find(|i| scene.meshes.get(i.mesh).is_some_and(|m| m.triangle_count > 0)).ok_or("No drawable instance")?;
     let mesh = scene.meshes.get(instance.mesh).ok_or("Missing mesh")?;
@@ -139,6 +164,15 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         return Err("Focused large-scene view did not cull any instance".into());
     }
     h.render()?.save(output.join("scene-frustum.png")).map_err(|e| e.to_string())?;
+    if !scene.mesh_textures.is_empty() {
+        h.state_mut().state.camera.fit(scene.bounds);
+        h.state_mut().state.project.object_colors = false;
+        h.state_mut().state.project.texture_preview = true;
+        h.state_mut().changed();
+        settle(&mut h)?;
+        h.render()?.save(output.join("scene-textures.png")).map_err(|e| e.to_string())?;
+        h.state_mut().state.project.texture_preview = false;
+    }
     let mut project_draws = Vec::new();
     if model.metadata.get("tasks").and_then(|v| v.as_array()).is_some_and(|v| !v.is_empty()) {
         use craft_anything_ui_egui::scene_viewer::project_panel::Mode;
@@ -146,7 +180,7 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         h.state_mut().state.search.clear();
         h.state_mut().state.camera.fit(scene.bounds);
         h.state_mut().state.project.mode = Mode::Schedule;
-        h.state_mut().state.project.interval_preview = true;
+        h.state_mut().state.project.interval_preview = false;
         h.state_mut().changed();
         settle(&mut h)?;
         let timeline = &h.state().project_frame.as_ref().ok_or("Project frame missing")?.frame.timeline;

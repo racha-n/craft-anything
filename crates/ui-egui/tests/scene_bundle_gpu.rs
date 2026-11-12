@@ -74,7 +74,7 @@ fn settle(h: &mut Harness<SceneApp>) {
     }
 }
 fn drag(h: &mut Harness<SceneApp>, button: egui::PointerButton) {
-    let start = egui::pos2(850., 450.);
+    let start = h.state().viewport_rect().expect("a rendered viewport").center();
     let end = start + egui::vec2(40., 20.);
     h.event(egui::Event::PointerMoved(start));
     h.step();
@@ -204,4 +204,76 @@ fn large_controls_do_not_trigger_an_endless_busy_idle_resize_loop() {
         assert!(h.state().ready(), "An idle viewport must stay idle without new input");
     }
     assert_eq!(h.state().draw_stats().unwrap().0, &stats);
+}
+
+fn effect_tail(growth: u32, opacity: u32) -> String {
+    fn block(growth: u32, opacity: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend([0x10, 0x48, 0x69, 0x23]);
+        bytes.extend([0, 1]);
+        for channel in [0.2f32, 0.6, 0.8] {
+            bytes.extend(channel.to_le_bytes());
+        }
+        bytes.extend(opacity.to_le_bytes());
+        bytes.extend([0, 1, 0]);
+        bytes.extend(growth.to_le_bytes());
+        for value in [0f64, 0., 1.] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend([0, 1, 0, 1, 0, 1]);
+        bytes.extend([0x6c, 0x4a, 0x92, 0x90]);
+        bytes
+    }
+    let mut bytes = vec![0, 1];
+    bytes.extend(1u32.to_le_bytes());
+    bytes.extend(block(growth, opacity));
+    bytes.extend(block(growth, opacity));
+    bytes.extend([0x7a, 0x54, 0xaf, 0x39]);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend([0x16, 0xe4, 0x99, 0x6f]);
+    bytes.extend([0u8; 32]);
+    bytes.extend(block(growth, opacity));
+    bytes.extend([0x3d, 0xc8, 0xb0, 0x03]);
+    bytes.extend(0u32.to_le_bytes());
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[test]
+#[ignore = "requires a native graphics adapter"]
+fn profile_growth_and_opacity_change_surface_pixels() {
+    use craft_anything_ui_egui::scene_viewer::project_panel::Mode;
+
+    let mut pictures = Vec::new();
+    for (growth, opacity) in [(1, 100), (4, 100), (1, 50)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = craft_anything_testkit::scene_bundle::fixture();
+        let metadata = serde_json::json!({"schema_version":4,"tasks":[{
+            "guid":"original-fixture-task","name":"Original fixture task","planned_start_wallclock_scalar":0,
+            "duration_storage_scalar":100,"status_storage_value":2,"date_storage_windows":[0,32535244799i64,100,32535244799i64],
+            "assignments":[{"resource_guid":craft_anything_testkit::scene_bundle::R,"profile_guid":"profile","planned_units":1.}]
+        }],"resources":[{"guid":craft_anything_testkit::scene_bundle::R,"name":"Synthetic assembly","kind_storage_byte":4}],
+        "definition_storage":{"profile":{"section":"Use Profiles","name":"Synthetic Install","raw_tail_hex":effect_tail(growth,opacity)}}});
+        files[5] = serde_json::to_vec(&metadata).unwrap();
+        for ((name, _), data) in craft_anything_formats::scene_bundle::MEMBERS.iter().zip(files) {
+            std::fs::write(dir.path().join(name), data).unwrap();
+        }
+        let path = dir.path().join("scene.json").to_string_lossy().into_owned();
+        let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).wgpu().build_eframe(move |cc| SceneApp::new(cc, path));
+        settle(&mut h);
+        h.state_mut().state.project.mode = Mode::Schedule;
+        h.state_mut().state.project.best_dates = true;
+        h.state_mut().state.project.profile_effects = true;
+        h.state_mut().state.project.interval_preview = false;
+        h.state_mut().state.project.focus = 50;
+        h.state_mut().changed();
+        settle(&mut h);
+        let frame = &h.state().project_frame.as_ref().unwrap().frame;
+        assert_eq!(frame.resource_phases[0].appearance_effect.as_ref().unwrap().progress, 0.5);
+        pictures.push(h.render().unwrap());
+    }
+    for changed in pictures.iter().skip(1) {
+        let pixels =
+            (220..780).flat_map(|y| (500..1250).map(move |x| (x, y))).filter(|(x, y)| pictures[0].get_pixel(*x, *y) != changed.get_pixel(*x, *y)).count();
+        assert!(pixels > 100, "Explicit growth or opacity must change rendered surface pixels: {pixels}");
+    }
 }

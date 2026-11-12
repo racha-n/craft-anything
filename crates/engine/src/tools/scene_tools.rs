@@ -96,6 +96,15 @@ struct PickParams {
     hidden_resources: Vec<String>,
     #[serde(default)]
     isolate_resources: Vec<String>,
+    #[serde(default)]
+    clipping_planes: Vec<InstanceClip>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InstanceClip {
+    instance_id: String,
+    /// Original-world half-space: dot(normal, point) + d <= 0.
+    plane: [f64; 4],
 }
 fn scene(ctx: &Ctx<'_>) -> Result<Arc<LoadedScene>, ToolError> {
     ctx.session.ext.get::<LoadedScene>().ok_or_else(|| ToolError::invalid("Open a scene bundle with formats_scene_bundle_open first."))
@@ -270,7 +279,21 @@ fn formats_scene_surface_pick(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOu
         hidden_instances: instance_filter(&p.hidden_instances)?,
         isolate_instances: instance_filter(&p.isolate_instances)?,
     };
-    let hit = loaded.scene.pick(p.origin, p.direction, &filters, || !ctx.cancel.is_cancelled()).map_err(|e| format_err(e, "a scene selection ray"))?;
+    if p.clipping_planes.len() > 100_000 {
+        return Err(ToolError::invalid("Too many clipping planes."));
+    }
+    let known = loaded.scene.instances.iter().enumerate().map(|(id, i)| (i.id.as_str(), id)).collect::<std::collections::BTreeMap<_, _>>();
+    let mut planes = std::collections::BTreeMap::new();
+    for clip in &p.clipping_planes {
+        let id = known.get(clip.instance_id.as_str()).ok_or_else(|| ToolError::invalid("A clipping plane belongs to an unknown scene instance."))?;
+        if planes.insert(*id, clip.plane).is_some() {
+            return Err(ToolError::invalid("Duplicate instance clipping plane."));
+        }
+    }
+    let hit = loaded
+        .scene
+        .pick_clipped(p.origin, p.direction, &filters, &planes, || !ctx.cancel.is_cancelled())
+        .map_err(|e| format_err(e, "a scene selection ray"))?;
     if ctx.cancel.is_cancelled() {
         return Err(ToolError::cancelled());
     }
@@ -303,6 +326,9 @@ mod tests {
         let target = crate::Target::from_bytes(PathBuf::from("scene.json"), "scene.json".into(), b"synthetic-manifest".to_vec());
         let bounds = Bounds([[-1., -1., 0.], [1., 1., 0.]]);
         let scene = Scene {
+            mesh_uvs: Default::default(),
+            mesh_textures: Default::default(),
+            texture_assets: None,
             id: "synthetic-scene".into(),
             source_sha256: "a".repeat(64),
             unit_declaration: "unknown".into(),

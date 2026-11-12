@@ -6,6 +6,18 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Planning workspace for project viewing (R3.14)
+
+The project viewer has a light desktop planning layout with a blue ribbon,
+resource navigator, aligned task/Gantt rows above the 3D view and a properties
+inspector. Task selection inspects source values without changing visibility;
+isolation remains an explicit action. Compact layout is still available.
+Unsupported editing, exchange, animation, reporting and window-management
+commands are visibly disabled with explanations, as requested; their backlog is
+listed in [planning-workspace.md](planning-workspace.md). The source project remains
+read only. Rendering and interaction checks are recorded in the local interface
+delivery; this does not close the broader project-format/native-parity work.
+
 ### Experimental project and scene viewer (R3.14)
 
 The desktop Project viewer opens the admitted 6.5.5.28 `.sp` layout directly or a
@@ -13,10 +25,14 @@ version-1 scene bundle through the same Deep-only engine tools used by CLI/MCP.
 It offers instanced 3D, orbit/pan/zoom, picking, resource filters, calendar-derived
 task dates, 4D focus/playback and 5D source quantities/costs. The main workbench
 shares its engine and settings; an existing file path routes into the viewer.
-Optional interval preview states that directional growth, transparency and native
-material effects are omitted. Missing dates, unknown profiles and unsupported
-cost inputs remain explicit. Direct task budgets are separate from experimental
-resource forecasts; partial sums are not presented as complete costs.
+An explicit profile-effects preview decodes controlled colour, opacity and growth
+fields, with clipping-aware picking and scoped Pause-calendar progress. The legacy
+interval preview remains available. Missing dates, unknown modifiers and unsupported
+cost inputs remain explicit. Embedded texture/UV candidates are opt-in. Direct task
+budgets, resource forecasts and recorded actual expense reports have separate totals;
+partial sums are not presented as complete costs. Metadata-only schedule/cost viewing
+uses source identity independently of drawable geometry. Bounded per-instance mesh
+measurements report stored world units and topology limitations.
 
 A private source project rendered 33,513 instances / 3,699,006 vertices on a
 discrete Vulkan GPU. All 241 tasks obtained schedule bounds; the root start/finish
@@ -26,8 +42,11 @@ geometry matched every frozen f64
 position, GPU byte, mesh, instance transform and resource identity. Three native
 leaf centres independently agreed in XYZ metres to four displayed decimals.
 Explicit object RGB was located using a saved/reopened single-colour control and
-three native leaf readbacks; only the admitted direct entity override is rendered.
-Inherited colours, textures and full source appearance remain unresolved.
+three native leaf readbacks. Further saved/reopened controls establish an outer
+Entities group override over inner-group and leaf RGB, with an unrelated leaf
+excluding dialog-state ambiguity. Only that admitted hierarchy policy is rendered;
+IncludeLibrary fallback, texture sampling, source-transparency conversion and
+complete native visual parity remain unresolved.
 Native-controlled Fixed/PerUnit, actual/remaining and rate-boundary examples also
 matched the headless evaluator. These are scoped observations: no arbitrary-file
 unit guarantee, engineering takeoff, currency conversion or full visual parity.

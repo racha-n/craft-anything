@@ -17,3 +17,12 @@ pub mod web_scripts;
 
 pub mod project_model;
 pub mod project_simulation;
+
+pub mod project_scene;
+pub mod project_visuals;
+
+pub mod project_expenses;
+
+pub mod project_rate_policy;
+
+pub mod project_time_rates;

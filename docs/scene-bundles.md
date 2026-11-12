@@ -83,9 +83,13 @@ deterministic instance IDs and resource membership. Metadata project schema 4
 supplies resource identities and the admitted schedule/cost storage fields.
 Optional node `source_diffuse` values are finite RGB candidates in [0,1]; older
 bundles without them retain placeholder shading.
-Optional `source_object_color` values are separate explicit RGB overrides. Their
-declared policy is `observed_entity_rgb_override_no_inheritance`; no library or
-ancestor fallback is inferred. Versions without these optional fields still open.
+Optional `source_object_color` values are separate RGB overrides. Saved/reopened
+controls establish that an outer Entities group override precedes an inner group
+and a leaf's retained RGB. The declared policy is
+`observed_outermost_entities_rgb_override_no_library_fallback`: the first active
+RGB on the rooted Entities chain wins; IncludeLibrary RGB never supplies this
+channel. This is scoped property-readback evidence, not full native pixel parity.
+Versions without these optional fields still open.
 
 Unknown versions and encodings are rejected. There are no older bundle versions.
 A future breaking change requires a new schema and explicit offline migration
@@ -119,3 +123,63 @@ renders after camera orbit, pan and zoom and records explicit verification limit
 For source projects it also evaluates before/middle/after schedule frames, verifies
 appearance changes, and saves 4D, 5D and experimental diffuse images with typed
 frame JSON. It is a test example, so screenshot writes are outside production UI code.
+
+
+## Additional experimental views
+
+Project task/cost/frame tools accept an explicit source `path` to read metadata
+without validating or inflating geometry. Their source SHA and geometry coverage
+remain separate from the current scene, and this route never replaces that scene.
+The desktop's **Open schedule/costs only** action exposes the same tools for a
+schedule-only file or for inspecting metadata independently of drawable geometry.
+
+`profile_effects` and `interval_preview` are mutually exclusive. The effects policy
+admits decoded active-phase RGB, opacity interpolation and controlled No Growth,
+Bottom to Top and Left to Right codes. It clips original surfaces against resource
+world bounds, with the same half-spaces used for picking; it creates no cut caps.
+Default progress uses elapsed wallclock. The controlled Pause flag enables an
+explicit assigned-calendar policy when its allocation matches the chosen dates;
+project-wide modifier precedence and shifted Actual/Best allocation are unresolved.
+Conflicting effects or visible co-owners retain original geometry. Transparent
+instances use global object-centre sorting, no depth writes and a 20,000-draw cap;
+intersecting transparent surfaces do not imply native visual parity.
+
+Embedded image definitions, cached raw/JPEG bytes and finite planar UVs are bounded
+and joined by source GUID. **Source textures (experimental)** is opt-in, with an
+explicit V-flip choice and Repeat sampling. Channel order for raw images, gamma,
+sampling and native inheritance/precedence remain unverified. No external asset
+path is opened. Explicit RGB overrides suppress texture candidates.
+
+`formats_scene_quantities` requires the current `scene_id` and measures a requested
+instance page. It reports world-coordinate surface area and, only after closed,
+consistently oriented topology checks, signed-tetrahedron volume. Exact-coordinate
+welding and vertex-fan checks do not establish self-intersection-free solids.
+Values retain unverified stored units; no aggregate engineering takeoff, native
+group quantity parity or unit conversion is claimed. The desktop measurement action
+uses this same tool and measures the original full surface, including clipped parts.
+
+Recorded type-5 Fixed expense reports have a separate bounded ledger, source dates
+and paged items. Missing collection coverage remains unknown, not zero. Recorded
+expenses never become budget-times-progress or attributed budget-line actuals.
+Direct Fixed planned value uses the controlled elapsed-time policy, independently
+of the working-time allocation used for resource forecasts. Currency conversion
+and unobserved expense types remain unresolved.
+
+
+Paid Equipment/Human/Location forecasts admit a single rate already effective at
+task start: Fixed, Daily, Hourly Partial and Hourly Complete. Complete rounds total
+hours upward; Daily retains fractional days. Hourly evaluation requires a nominal
+day length. The current adapter infers one only when all referenced local working
+day types have the same length and there is no parent/nil/ambiguous calendar data;
+it never substitutes eight hours. This inference is reported explicitly. Paid time
+PV is a declared linear working-fraction preview, distinct from observed budget
+formulas. Planned-status zero actual/full remaining is scoped to controlled inputs;
+other statuses and multiple effective windows remain unattributed.
+
+
+An original COLLADA/PNG control saved by the native application independently
+confirms two-component f32 UV records as well as the earlier three-component
+planar records. Its cached JPEG payload matches the reader byte-for-byte and its
+four decoded colour centres match independently decoded native bytes. This does
+not establish absolute V orientation, gamma/filter/wrap policy or raw-codec channel
+order. The renderer retains the explicit V-flip control and experimental label.

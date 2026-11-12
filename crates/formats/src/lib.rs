@@ -149,3 +149,8 @@ mod tests {
 pub mod sp_project;
 
 pub mod project_calendar;
+
+pub mod project_appearance;
+pub mod scene_quantities;
+
+pub mod project_textures;

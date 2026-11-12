@@ -26,6 +26,10 @@ pub(crate) struct Node {
     pub source_object_color: Option<[f64; 3]>,
     pub source_object_color_origin: Option<SourceDiffuseOrigin>,
     pub source_opacity: Option<f64>,
+    /// Raw stored transparency candidate. No UI-percent or rendering-alpha conversion is admitted.
+    pub source_transparency_storage_candidate: Option<f64>,
+    pub source_transparency_storage_origin: Option<SourceDiffuseOrigin>,
+    pub attribute_references: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -39,6 +43,7 @@ pub(crate) struct Mesh {
     pub index_byte_offset: usize,
     pub source_precision_bits: u32,
     pub local_bounds: [[f64; 3]; 2],
+    pub texture_coordinates: Option<Vec<[f32; 2]>>,
 }
 pub(crate) struct Geometry<'a> {
     pub nodes: Vec<Node>,
@@ -91,7 +96,12 @@ impl<'a> Geometry<'a> {
                 r.marker(&[0x5d, 0xa2, 0x6d, 0x26])?;
                 let n = r.count(16 * 1024 * 1024)?;
                 let payload = bytes(r.data, r.pos, n)?;
-                let candidate = AttributeColours { diffuse: source_diffuse_candidate(payload), object: source_object_color_candidate(payload) };
+                let mut candidate = AttributeColours {
+                    diffuse: source_diffuse_candidate(payload),
+                    object: source_object_color_candidate(payload),
+                    transparency_storage: binary_rgb_transparency_candidate(payload).map(|(_, value)| value),
+                    references: Vec::new(),
+                };
                 r.skip(checked_add(n, 1)?)?;
                 let tag = r.take::<4>()?;
                 if tag == [0xd0, 0xbc, 0xa1, 0x06] {
@@ -100,7 +110,11 @@ impl<'a> Geometry<'a> {
                     if self.opaque_refs > 1_000_000 {
                         return Err(fail("limit", "Geometry attribute reference budget"));
                     }
-                    r.skip(n.checked_mul(20).ok_or_else(|| fail("limit", "Attribute references"))?)?;
+                    for _ in 0..n {
+                        let raw = r.take::<16>()?;
+                        candidate.references.push(guid_at(&raw, 0)?);
+                        let _ordinal = r.u32()?;
+                    }
                     r.marker(&[0x2c, 0x57, 0xd9, 0xda])?;
                     r.marker(&[0x59, 0xee, 0x21, 0xf4])?;
                     Ok(candidate)
@@ -175,11 +189,11 @@ impl<'a> Geometry<'a> {
             1 => 4usize,
             _ => return Err(fail("unsupported_layout", "UV precision")),
         };
-        if (uv == 0 && (components != 0 || uv_precision != 0)) || (uv > 0 && (uv != n || components != 3 || uv_precision != 1)) {
+        if (uv == 0 && (components != 0 || uv_precision != 0)) || (uv > 0 && (uv != n || !matches!(components, 2 | 3) || uv_precision != 1)) {
             return Err(fail("unsupported_layout", "Empty UV arity"));
         }
-        let uvbytes = uv.checked_mul(components).and_then(|n| n.checked_mul(width)).ok_or_else(|| fail("limit", "UV bytes"))?;
-        r.skip(uvbytes)?;
+        let _uvbytes = uv.checked_mul(components).and_then(|n| n.checked_mul(width)).ok_or_else(|| fail("limit", "UV bytes"))?;
+        let texture_coordinates = planar_uvs(r, uv, components, self.keep_going)?;
         r.marker(&[0])?;
         let _ = self.attribute(r)?;
         r.skip(8)?;
@@ -201,6 +215,7 @@ impl<'a> Geometry<'a> {
             index_byte_offset,
             source_precision_bits: precision,
             local_bounds: bounds,
+            texture_coordinates,
         });
         Ok(id)
     }
@@ -390,6 +405,13 @@ impl<'a> Geometry<'a> {
                 encoding: "framed_binary_object_rgb",
             }),
             source_opacity: None,
+            source_transparency_storage_candidate: attribute_colours.transparency_storage,
+            source_transparency_storage_origin: attribute_colours.transparency_storage.map(|_| SourceDiffuseOrigin {
+                section: section.to_owned(),
+                decoded_offset: attribute_offset,
+                encoding: "framed_binary_rgb_transparency_storage_candidate",
+            }),
+            attribute_references: attribute_colours.references,
         });
         Ok(guid)
     }
@@ -463,16 +485,40 @@ fn source_diffuse_candidate(payload: &[u8]) -> Option<[f64; 3]> {
     candidate
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct AttributeColours {
     diffuse: Option<[f64; 3]>,
     object: Option<[f64; 3]>,
+    references: Vec<String>,
+    transparency_storage: Option<f64>,
 }
 // Native-controlled original-color selection removes this RGB envelope entirely.
 // Admit only the observed active override family; other flags retain no object color.
 const OBJECT_COLOR_FLAGS: &[u64] = &[17];
 fn source_object_color_candidate(payload: &[u8]) -> Option<[f64; 3]> {
-    binary_object_color(payload, OBJECT_COLOR_FLAGS)
+    binary_object_color(payload, OBJECT_COLOR_FLAGS).or_else(|| binary_rgb_transparency_candidate(payload).map(|(rgb, _)| rgb))
+}
+// Exact paired RGB/transparency envelope observed in saved and reopened native controls.
+// The fourth scalar is retained as storage only; its general percent/alpha mapping is unknown.
+fn binary_rgb_transparency_candidate(payload: &[u8]) -> Option<([f64; 3], f64)> {
+    if payload.len() != 35
+        || payload.get(..8)? != [0x11, 0, 0, 0, 0, 0, 0, 0x1d]
+        || payload.get(8..16)? != [0; 8]
+        || payload.get(16).copied()? != 0x21
+        || payload.get(33..35)? != [0, 0]
+    {
+        return None;
+    }
+    let mut scalars = [0.; 4];
+    for (axis, value) in scalars.iter_mut().enumerate() {
+        let at = 17usize.checked_add(axis.checked_mul(4)?)?;
+        *value = f64::from(f32::from_le_bytes(payload.get(at..at.checked_add(4)?)?.try_into().ok()?));
+        if !value.is_finite() || !(0.0..=1.0).contains(value) {
+            return None;
+        }
+    }
+    let [r, g, b, storage] = scalars;
+    Some(([r, g, b], storage))
 }
 fn binary_object_color(payload: &[u8], flags: &[u64]) -> Option<[f64; 3]> {
     let prefix = u64::from_le_bytes(payload.get(..8)?.try_into().ok()?);
@@ -500,6 +546,42 @@ fn binary_object_color(payload: &[u8], flags: &[u64]) -> Option<[f64; 3]> {
 #[cfg(test)]
 mod object_color_tests {
     use super::*;
+    fn transparency_envelope(rgb: [f32; 3], storage: f32) -> Vec<u8> {
+        let mut bytes = vec![0x11, 0, 0, 0, 0, 0, 0, 0x1d];
+        bytes.extend([0; 8]);
+        bytes.push(0x21);
+        for value in rgb.into_iter().chain([storage]) {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend([0, 0]);
+        bytes
+    }
+    #[test]
+    fn paired_transparency_preserves_rgb_and_raw_storage() {
+        let bytes = transparency_envelope([0.25, 0.5, 0.75], 0.375);
+        assert_eq!(source_object_color_candidate(&bytes), Some([0.25, 0.5, 0.75]));
+        assert_eq!(binary_rgb_transparency_candidate(&bytes), Some(([0.25, 0.5, 0.75], 0.375)));
+        assert_eq!(binary_object_color(&bytes, &[17]), None);
+    }
+    #[test]
+    fn paired_transparency_rejects_unknown_framing_and_hostile_values() {
+        let bytes = transparency_envelope([0.25, 0.5, 0.75], 0.375);
+        for n in 0..bytes.len() {
+            assert!(binary_rgb_transparency_candidate(&bytes[..n]).is_none());
+        }
+        for at in [0, 7, 8, 16, 33, 34] {
+            let mut wrong = bytes.clone();
+            wrong[at] ^= 1;
+            assert!(binary_rgb_transparency_candidate(&wrong).is_none());
+        }
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(binary_rgb_transparency_candidate(&transparency_envelope([value, 0.5, 0.75], 0.375)).is_none());
+            assert!(binary_rgb_transparency_candidate(&transparency_envelope([0.25, 0.5, 0.75], value)).is_none());
+        }
+        let mut extra = bytes;
+        extra.push(0);
+        assert!(binary_rgb_transparency_candidate(&extra).is_none());
+    }
     fn envelope(rgb: [f32; 3], text: &str) -> Vec<u8> {
         let mut b = 17u64.to_le_bytes().to_vec();
         b.extend((text.len() as u64).to_le_bytes());
@@ -597,5 +679,82 @@ mod color_tests {
             assert_eq!(source_diffuse_candidate(raw.get(..n).unwrap_or(&[])), None);
         }
         assert_eq!(source_diffuse_candidate(b"diffuse=(r=1 g=0 b=0)"), None);
+    }
+}
+
+/// Candidate binding policy: one known texture reference on the mesh owner itself.
+/// No library, parent, or entity inheritance is inferred.
+pub(crate) fn attach_textures(scene: &mut scene_bundle::Scene, geometry: &Geometry<'_>, assets: std::sync::Arc<crate::project_textures::TextureAssets>) {
+    scene.mesh_textures.clear();
+    let owners: BTreeMap<_, _> = geometry.nodes.iter().map(|node| (node.guid.as_str(), node)).collect();
+    for (id, mesh) in geometry.meshes.iter().enumerate() {
+        if !scene.mesh_uvs.contains_key(&id) {
+            continue;
+        }
+        let Some(owner) = owners.get(mesh.owner.as_str()) else {
+            continue;
+        };
+        let candidates: BTreeSet<_> = owner.attribute_references.iter().filter(|guid| assets.image_for_texture(guid).is_some()).collect();
+        if candidates.len() == 1
+            && let Some(guid) = candidates.into_iter().next()
+        {
+            scene.mesh_textures.insert(id, guid.clone());
+        }
+    }
+    scene.texture_assets = Some(assets);
+}
+
+fn planar_uvs(r: &mut Input<'_>, count: usize, components: usize, keep_going: &mut dyn FnMut(f32) -> bool) -> Result<Option<Vec<[f32; 2]>>> {
+    if count > VERTEX_LIMIT {
+        return Err(fail("limit", "UV count budget"));
+    }
+    if (count == 0 && components != 0) || (count > 0 && !matches!(components, 2 | 3)) {
+        return Err(fail("unsupported_layout", "UV component count"));
+    }
+    let mut coordinates = Vec::new();
+    coordinates.try_reserve_exact(count).map_err(|_| fail("limit", "UV allocation"))?;
+    let mut planar = true;
+    for i in 0..count {
+        if i % 4096 == 0 {
+            check(keep_going, 0.55)?;
+        }
+        let u = r.f32()? as f32;
+        let v = r.f32()? as f32;
+        let w = if components == 3 { r.f32()? } else { 0. };
+        planar &= w == 0.;
+        coordinates.push([u, v]);
+    }
+    Ok((count > 0 && planar).then_some(coordinates))
+}
+#[cfg(test)]
+mod texture_coordinate_tests {
+    use super::*;
+    #[test]
+    fn planar_only_and_unclamped() -> Result<()> {
+        let raw: Vec<u8> = [-2f32, 3., 0., 0.25, 0.5, 0.].into_iter().flat_map(f32::to_le_bytes).collect();
+        assert_eq!(planar_uvs(&mut Input::new(&raw), 2, 3, &mut |_| true)?, Some(vec![[-2., 3.], [0.25, 0.5]]));
+        let projective: Vec<u8> = [0f32, 1., 2.].into_iter().flat_map(f32::to_le_bytes).collect();
+        assert!(planar_uvs(&mut Input::new(&projective), 1, 3, &mut |_| true)?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn two_component_imported_uvs_retain_corner_order_and_validate_payload() -> Result<()> {
+        let values = [0f32, 0., 1., 0., 1., 1., 0., 1.];
+        let bytes = values.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+        assert_eq!(planar_uvs(&mut Input::new(&bytes), 4, 2, &mut |_| true)?, Some(vec![[0., 0.], [1., 0.], [1., 1.], [0., 1.]]));
+        assert!(planar_uvs(&mut Input::new(&bytes[..31]), 4, 2, &mut |_| true).is_err());
+        assert!(planar_uvs(&mut Input::new(&bytes), 4, 4, &mut |_| true).is_err());
+        assert!(planar_uvs(&mut Input::new(&bytes), 4, 2, &mut |_| false).is_err());
+        let invalid = [f32::NAN, 0.].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+        assert!(planar_uvs(&mut Input::new(&invalid), 1, 2, &mut |_| true).is_err());
+        Ok(())
+    }
+    #[test]
+    fn invalid_truncated_cancelled() {
+        let invalid: Vec<u8> = [f32::NAN, 0., 0.].into_iter().flat_map(f32::to_le_bytes).collect();
+        assert!(planar_uvs(&mut Input::new(&invalid), 1, 3, &mut |_| true).is_err());
+        assert!(planar_uvs(&mut Input::new(&[0; 11]), 1, 3, &mut |_| true).is_err());
+        assert!(planar_uvs(&mut Input::new(&[0; 12]), 1, 3, &mut |_| false).is_err());
+        assert!(planar_uvs(&mut Input::new(&[]), VERTEX_LIMIT + 1, 2, &mut |_| true).is_err());
     }
 }

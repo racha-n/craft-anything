@@ -77,19 +77,12 @@ pub(crate) fn parse(c: &Container) -> Result<Index> {
     pos = 32;
     for _ in 0..root(profile_data)? {
         let (guid, end) = identity(profile_data, pos, &[0xc1, 0xcf, 0xd6, 0xe8], &mut profiles)?;
-        for at in [6, 69, 176] {
-            marker(profile_data, checked_add(end, at)?, &[0x10, 0x48, 0x69, 0x23])?;
-        }
-        for at in [65, 128, 235] {
-            marker(profile_data, checked_add(end, at)?, &[0x6c, 0x4a, 0x92, 0x90])?;
-        }
-        marker(profile_data, checked_add(end, 132)?, OPEN)?;
-        marker(profile_data, checked_add(end, 136)?, &[0; 4])?;
-        marker(profile_data, checked_add(end, 140)?, CLOSE)?;
-        marker(profile_data, checked_add(end, 239)?, &[0x3d, 0xc8, 0xb0, 0x03])?;
-        bytes(profile_data, end, 247)?;
-        storage.insert(guid, serde_json::json!({"section":"Use Profiles","offset":pos,"name":string_at(profile_data,checked_add(pos,28)?)?.0,"raw_tail_hex":hex(bytes(profile_data,end,247)?)}));
-        pos = checked_add(end, 247)?;
+        let tail = profile_data.get(end..).ok_or_else(|| fail("truncated", "Profile tail"))?;
+        let (layout, consumed) =
+            crate::project_appearance::parse_prefix(tail).map_err(|error| fail("unsupported_layout", format!("Appearance profile tail: {error}")))?;
+        let raw_tail = bytes(profile_data, end, consumed)?;
+        storage.insert(guid, serde_json::json!({"section":"Use Profiles","offset":pos,"name":string_at(profile_data,checked_add(pos,28)?)?.0,"raw_tail_hex":hex(raw_tail),"appearance_layout":layout}));
+        pos = checked_add(end, consumed)?;
     }
     finish(profile_data, pos)?;
     let code_data = c.decoded.get("Activity Codes").ok_or_else(|| fail("missing_dependency", "Code definitions missing"))?;

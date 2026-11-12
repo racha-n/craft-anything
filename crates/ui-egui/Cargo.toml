@@ -33,6 +33,7 @@ rfd = { workspace = true }
 # Pictures pasted from the clipboard (see `paste`).
 arboard = { workspace = true }
 pollster = "0.4"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
 # Safe, small OS-language lookup; MIT OR Apache-2.0, no native runtime dependency.
 sys-locale = "0.3.2"
 

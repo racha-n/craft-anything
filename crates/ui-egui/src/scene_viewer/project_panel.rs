@@ -16,9 +16,15 @@ pub struct State {
     pub best_dates: bool,
     pub playing: bool,
     pub search: String,
+    #[serde(default)]
+    pub texture_preview: bool,
+    #[serde(default)]
+    pub flip_texture_v: bool,
     pub source_colors: bool,
     pub object_colors: bool,
     pub interval_preview: bool,
+    #[serde(default)]
+    pub profile_effects: bool,
 }
 pub fn wallclock(value: i64) -> String {
     let mut days = value.div_euclid(86400);
@@ -57,25 +63,38 @@ pub fn money(value: Option<i64>) -> String {
     value.map(|n| format!("{}{}.{:02}", if n < 0 { "-" } else { "" }, n.unsigned_abs() / 100, n.unsigned_abs() % 100)).unwrap_or_else(|| "Unresolved".into())
 }
 pub fn controls(ui: &mut Ui, state: &mut State, frame: Option<&Frame>) -> bool {
+    controls_inner(ui, state, frame, true)
+}
+pub fn metadata_controls(ui: &mut Ui, state: &mut State, frame: Option<&Frame>) -> bool {
+    if state.mode == Mode::Model {
+        state.mode = Mode::Schedule;
+    }
+    controls_inner(ui, state, frame, false)
+}
+fn controls_inner(ui: &mut Ui, state: &mut State, frame: Option<&Frame>, geometry: bool) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        changed |= ui.selectable_value(&mut state.mode, Mode::Model, "3D").changed();
+        if geometry {
+            changed |= ui.selectable_value(&mut state.mode, Mode::Model, "3D").changed();
+        }
         changed |= ui.selectable_value(&mut state.mode, Mode::Schedule, "4D").changed();
         changed |= ui.selectable_value(&mut state.mode, Mode::Cost, "5D").changed();
-        if ui
-            .checkbox(&mut state.source_colors, "Source diffuse (experimental)")
-            .on_hover_text("Raw material preview differs from the checked explicit object colours.")
-            .changed()
+        if geometry
+            && ui
+                .checkbox(&mut state.source_colors, "Source diffuse (experimental)")
+                .on_hover_text("Raw material preview differs from the checked explicit object colours.")
+                .changed()
         {
             if state.source_colors {
                 state.object_colors = false;
             }
             changed = true;
         }
-        if ui
-            .checkbox(&mut state.object_colors, "Object colours (partial)")
-            .on_hover_text("Admitted explicit entity RGB overrides; unknown or inherited colours keep placeholder shading.")
-            .changed()
+        if geometry
+            && ui
+                .checkbox(&mut state.object_colors, "Object colours (partial)")
+                .on_hover_text("Admitted group colour overrides and explicit leaf RGB; full material fidelity remains scoped.")
+                .changed()
         {
             if state.object_colors {
                 state.source_colors = false;
@@ -83,8 +102,33 @@ pub fn controls(ui: &mut Ui, state: &mut State, frame: Option<&Frame>) -> bool {
             changed = true;
         }
     });
+    if geometry {
+        changed |= ui
+            .checkbox(&mut state.texture_preview, "Source textures (experimental)")
+            .on_hover_text(
+                "Embedded image and UV candidates; sampling and native precedence are unverified. Disable Object colours to inspect raw image candidates.",
+            )
+            .changed();
+        if state.texture_preview {
+            changed |= ui.checkbox(&mut state.flip_texture_v, "Flip texture V").changed();
+        }
+    }
     if state.mode != Mode::Model {
-        changed |= ui.checkbox(&mut state.interval_preview, "Interval preview (growth and transparency omitted)").changed();
+        if ui.checkbox(&mut state.profile_effects, "Profile effects preview").changed() {
+            if state.profile_effects {
+                state.interval_preview = false;
+            }
+            changed = true;
+        }
+        if ui.checkbox(&mut state.interval_preview, "Interval preview (growth and transparency omitted)").changed() {
+            if state.interval_preview {
+                state.profile_effects = false;
+            }
+            changed = true;
+        }
+        if state.profile_effects {
+            ui.small("Admitted profile RGB, opacity and growth directions; declared elapsed/Pause-calendar progress and resource-bound clipping. Native modifiers and cut caps remain scoped.");
+        }
         if state.interval_preview {
             ui.small("Custom Install profiles use whole-object intervals. Growth, transparency and source material precedence are not reproduced.");
         }
@@ -143,7 +187,39 @@ pub fn details(ui: &mut Ui, state: &mut State, frame: &Frame, model: &ProjectMod
                 format!("Planned at focus unresolved ({} lines)", costs.unresolved_cumulative_lines)
             });
         });
-        ui.small("Amounts retain source currency context. Missing actual costs and unverified time allocations remain unresolved.");
+        if let Some(expenses) = &costs.recorded_actual_expenses {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!("Recorded actual expenses: {}", money(expenses.recorded_total_minor)));
+                ui.label(format!("At focus: {}", money(expenses.recorded_at_focus_minor)));
+                ui.label(format!("{} reports / {} items", expenses.report_count, expenses.item_count));
+            });
+            if expenses.recorded_total_minor.is_none() {
+                ui.small(format!(
+                    "Resolved expense subtotal: {}; {} task collections unknown",
+                    money(Some(expenses.partial_recorded_total_minor)),
+                    expenses.unknown_task_collections
+                ));
+            }
+            egui::CollapsingHeader::new("Recorded expense items").show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("expense_items").max_height(120.).show_rows(ui, 22., expenses.items.len(), |ui, range| {
+                    for index in range {
+                        if let Some(item) = expenses.items.get(index) {
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(false, &item.name).clicked() {
+                                    selected = Some(item.task_guid.clone());
+                                }
+                                ui.label(money(item.amount_minor));
+                                ui.label(item.date_wallclock.map(wallclock).unwrap_or_else(|| "Unresolved date".into()));
+                            });
+                        }
+                    }
+                });
+                for reason in &expenses.limitations {
+                    ui.small(reason);
+                }
+            });
+        }
+        ui.small("Amounts retain source currency context. Recorded expenses remain separate from budgets and resource forecasts.");
         ui.add(egui::TextEdit::singleline(&mut state.search).hint_text("Find a task or resource"));
         let search = state.search.to_lowercase();
         let rows = costs
@@ -159,6 +235,11 @@ pub fn details(ui: &mut Ui, state: &mut State, frame: &Frame, model: &ProjectMod
                         if ui.selectable_label(false, line.task_name.chars().take(60).collect::<String>()).on_hover_text(&line.task_name).clicked() {
                             selected = Some(line.task_guid.clone());
                         }
+                        if line.resource_guid.is_none() {
+                            ui.label(format!("Direct budget {} / planned at focus {}", money(line.budget_minor), money(line.planned_cumulative_minor)))
+                                .on_hover_text(line.unresolved_reasons.join("\n"));
+                            return;
+                        }
                         ui.label(format!(
                             "Budget {} · actual {} · remaining {} · planned at focus {}",
                             money(line.budget_minor),
@@ -168,12 +249,13 @@ pub fn details(ui: &mut Ui, state: &mut State, frame: &Frame, model: &ProjectMod
                         ))
                         .on_hover_text(line.unresolved_reasons.join("\n"));
                         let units = |value: Option<f64>| value.map(|n| format!("{n:.3}")).unwrap_or_else(|| "Unresolved".into());
-                        let unit = line.resource_guid.as_ref().and_then(|id| model.resources.iter().find(|r| r.guid == *id)).and_then(|r| r.unit_storage_byte);
-                        let label = match unit {
-                            Some(7) => "Each".into(),
-                            Some(0) => "unspecified source unit".into(),
-                            Some(code) => format!("source unit code {code}"),
-                            None => "unresolved source unit".into(),
+                        let resource = line.resource_guid.as_ref().and_then(|id| model.resources.iter().find(|r| r.guid == *id));
+                        let label = match (resource.and_then(|r| r.unit_storage_byte), resource.and_then(|r| r.kind_storage_byte)) {
+                            (Some(0), Some(1..=3)) => "normalized nominal-day storage".into(),
+                            (Some(7), _) => "Each".into(),
+                            (Some(0), _) => "unspecified source unit".into(),
+                            (Some(code), _) => format!("source unit code {code}"),
+                            (None, _) => "unresolved source unit".into(),
                         };
                         ui.label(format!(
                             "Quantity: {} / {} / {} {label} (planned / actual / remaining)",

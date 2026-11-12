@@ -1954,7 +1954,16 @@ impl CraftApp {
             if self.scene_viewer.is_none() {
                 self.scene_viewer = Some(scene_viewer::SceneApp::with_engine(self.engine.clone(), self.scene_graphics.clone(), self.state.scene_path.clone()));
             }
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(t.canvas)).show(ui, |ui| {
+            let planning = self.scene_viewer.as_ref().is_some_and(|s| s.state.planning.enabled);
+            let frame = if planning {
+                egui::Frame::new().fill(theme::PlanningTokens::default().surface.chrome).inner_margin(0)
+            } else {
+                egui::Frame::new().fill(t.canvas)
+            };
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                if planning {
+                    scene_viewer::planning::style(ui);
+                }
                 if ui.button("Back to workspace").clicked() {
                     self.state.scene_viewer_open = false;
                 }

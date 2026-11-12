@@ -1,5 +1,7 @@
 //! Bounded adapter from project storage metadata to explicit experimental simulation views.
 //! It preserves missing inputs, calendar failures and unsupported resource costs as unresolved.
+#[path = "project_model/cost_basis.rs"]
+mod cost_basis;
 use crate::project_simulation::{self as sim, Assignment, DefaultProfile, Interval, PhaseState, Provenance, WallClock};
 use craft_anything_formats::project_calendar::{self, Calendars, WorkAllocation};
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,7 @@ pub enum DateMode {
 pub enum AppearancePolicy {
     Strict,
     IntervalPreview,
+    ProfileEffectsPreview,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,7 @@ pub struct ProfileView {
     pub strict_profile: DefaultProfile,
     pub preview_profile: DefaultProfile,
     pub unresolved_effects: Vec<String>,
+    pub decoded: Option<craft_anything_formats::project_appearance::ProfileTail>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +88,7 @@ pub struct ResourceCostView {
     pub guid: String,
     pub name: String,
     pub kind_storage_byte: Option<u8>,
-    /// Raw source unit code only; no scale or engineering-unit conversion is inferred.
+    /// Raw source unit code; interpretations are limited to each admitted cost-kind policy.
     pub unit_storage_byte: Option<u8>,
     pub rates: Vec<RateView>,
     pub unresolved_reasons: Vec<String>,
@@ -124,6 +128,9 @@ pub struct CostSummary {
     pub unresolved_cumulative_lines: usize,
     pub complete: bool,
     pub semantics: String,
+    /// Recorded source report expenses remain independent of forecast and planned-value lines.
+    #[serde(default)]
+    pub recorded_actual_expenses: Option<crate::project_expenses::ExpenseSummary>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcePhase {
@@ -132,6 +139,8 @@ pub struct ResourcePhase {
     pub provenance: Provenance,
     pub unresolved_reason: Option<String>,
     pub unresolved_profile_effects: Vec<String>,
+    #[serde(default)]
+    pub appearance_effect: Option<crate::project_visuals::AppearanceEffect>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TimelineSummary {
@@ -214,6 +223,7 @@ fn unset_dates() -> [i64; 4] {
 struct PreparedTask {
     stored: StoredTask,
     planned: Option<WorkAllocation>,
+    nominal_day_seconds: Option<u64>,
 }
 #[derive(Debug, Clone)]
 struct PreparedLine {
@@ -233,8 +243,11 @@ pub struct ProjectModel {
     prepared: Vec<PreparedTask>,
     assignments: Vec<Assignment>,
     preview_assignments: Vec<Assignment>,
+    effects_assignments: Vec<Assignment>,
+    visual_assignments: BTreeMap<String, Vec<(usize, usize)>>,
     resource_profile_effects: BTreeMap<String, Vec<String>>,
     lines: Vec<PreparedLine>,
+    expense_ledger: crate::project_expenses::Ledger,
 }
 
 fn valid_date(value: i64) -> Option<i64> {
@@ -283,6 +296,19 @@ fn rounded(n: i128, d: i128) -> Result<i64, String> {
     }
     let v = n.checked_add(d / 2).ok_or("Cost rounding overflows")? / d;
     i64::try_from(v).map_err(|_| "Cost exceeds the supported integer amount".into())
+}
+fn direct_planned_value(task: &TaskView, amount: i64, focus: i64) -> Result<i64, String> {
+    if amount == 0 {
+        return Ok(0);
+    }
+    if amount < 0 || task.schedule_kind != ScheduleKind::Work {
+        return Err("Nonzero direct Planned Value requires an admitted working task".into());
+    }
+    let (start, finish) = task.planned_start.zip(task.planned_finish).ok_or("Direct Planned Value needs resolved planned bounds")?;
+    let duration = finish.checked_sub(start).filter(|n| *n > 0).ok_or("Invalid direct Planned Value duration")?;
+    let elapsed = focus.clamp(start, finish).checked_sub(start).ok_or("Direct Planned Value elapsed time overflow")?;
+    let numerator = i128::from(amount).checked_mul(i128::from(elapsed)).ok_or("Direct Planned Value amount overflows")?;
+    rounded(numerator, i128::from(duration))
 }
 fn decode_hex(value: &str, limit: usize) -> Result<Vec<u8>, String> {
     if !value.len().is_multiple_of(2) || value.len() / 2 > limit {
@@ -397,6 +423,7 @@ impl ProjectModel {
         let mut tasks = Vec::new();
         let mut prepared = Vec::new();
         let mut total_segments = 0usize;
+        let mut nominal_day_cache = BTreeMap::new();
         for (i, stored) in inputs.iter().enumerate() {
             if cancelled() {
                 return Err("Project model preparation cancelled".into());
@@ -478,7 +505,12 @@ impl ProjectModel {
                 declared_policy_notes: policy_notes,
                 unresolved_reasons: reasons,
             });
-            prepared.push(PreparedTask { stored: stored.clone(), planned });
+            let nominal_day_seconds = planned.as_ref().and_then(|work| {
+                *nominal_day_cache
+                    .entry(work.calendar_guid.clone())
+                    .or_insert_with(|| calendars.as_ref().and_then(|c| crate::project_time_rates::uniform_day_seconds(c, &work.calendar_guid)))
+            });
+            prepared.push(PreparedTask { stored: stored.clone(), planned, nominal_day_seconds });
         }
         let mut aggregate_state = vec![0u8; tasks.len()];
         for i in 0..tasks.len() {
@@ -500,10 +532,13 @@ impl ProjectModel {
                 check_label(&name)?;
                 let raw = definition.get("raw_tail_hex").and_then(Value::as_str).and_then(|s| decode_hex(s, 1024).ok());
                 let window = |offset| raw.as_ref().and_then(|b| b.get(offset..offset + 4)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-                let base_kind_candidate = window(2);
-                let direction_candidate = window(30);
-                let opacity_percent_candidate = window(24);
-                let supported_effect_signature = direction_candidate.is_none_or(|v| v == 1) && opacity_percent_candidate.is_none_or(|v| v == 100);
+                let decoded = raw.as_ref().and_then(|bytes| craft_anything_formats::project_appearance::parse_exact(bytes).ok());
+                let malformed = definition.get("raw_tail_hex").is_some() && decoded.is_none();
+                let active = decoded.as_ref().and_then(|p| p.phases.first());
+                let base_kind_candidate = decoded.as_ref().map(|p| p.action_storage).or_else(|| window(2));
+                let direction_candidate = active.map(|p| p.growth_storage).or_else(|| window(31));
+                let opacity_percent_candidate = active.map(|p| p.opacity_percent_storage).or_else(|| window(24));
+                let supported_effect_signature = !malformed && direction_candidate.is_none_or(|v| v == 1) && opacity_percent_candidate.is_none_or(|v| v == 100);
                 let strict_profile = match name.as_str() {
                     "Install" if base_kind_candidate.is_none_or(|v| v == 1) && supported_effect_signature => DefaultProfile::Install,
                     "Maintain" if base_kind_candidate.is_none_or(|v| v == 4) && supported_effect_signature => DefaultProfile::Maintain,
@@ -526,11 +561,14 @@ impl ProjectModel {
                     strict_profile,
                     preview_profile,
                     unresolved_effects,
+                    decoded,
                 });
             }
         }
         let mut assignments = Vec::new();
         let mut preview_assignments = Vec::new();
+        let mut effects_assignments = Vec::new();
+        let mut visual_assignments = BTreeMap::<String, Vec<(usize, usize)>>::new();
         let mut resource_profile_effects = BTreeMap::<String, Vec<String>>::new();
         let mut lines = Vec::new();
         let mut direct_seen = BTreeSet::new();
@@ -579,6 +617,20 @@ impl ProjectModel {
                     profile: definition.map_or(DefaultProfile::Unsupported, |p| p.preview_profile),
                     provenance: Provenance::CallerDeclared,
                 });
+                effects_assignments.push(Assignment {
+                    task_id: t.stored.guid.clone(),
+                    resource_id: a.resource_guid.clone(),
+                    profile: definition.map_or(DefaultProfile::Unsupported, |p| match p.decoded.as_ref().map(|raw| raw.action_storage) {
+                        Some(1) => DefaultProfile::Install,
+                        Some(4) => DefaultProfile::Maintain,
+                        None => p.strict_profile,
+                        _ => DefaultProfile::Unsupported,
+                    }),
+                    provenance: Provenance::CallerDeclared,
+                });
+                if let Some(profile_slot) = profile_index.get(&a.profile_guid) {
+                    visual_assignments.entry(a.resource_guid.clone()).or_default().push((task_index, *profile_slot));
+                }
                 if let Some(profile) = definition {
                     let effects = resource_profile_effects.entry(a.resource_guid.clone()).or_default();
                     for effect in &profile.unresolved_effects {
@@ -608,19 +660,47 @@ impl ProjectModel {
                     planned_cumulative_minor: None,
                     unresolved_reasons: Vec::new(),
                 };
-                match (ri.and_then(|r| resources.get(r)), t.planned.as_ref(), units) {
-                    (Some(r), Some(p), Some(u)) => {
-                        line.budget_minor = cost_for_work(r, p, u, None).map_err(|e| line.unresolved_reasons.push(e)).ok();
-                        if let Some(amount) = constant_per_unit(r, p) {
-                            line.actual_minor = actual.and_then(|v| millionths(v).ok()).and_then(|v| rounded(i128::from(amount) * i128::from(v), SCALE).ok());
-                            line.remaining_minor =
-                                remaining.and_then(|v| millionths(v).ok()).and_then(|v| rounded(i128::from(amount) * i128::from(v), SCALE).ok());
-                        } else {
-                            line.unresolved_reasons
-                                .push("Actual/remaining cost requires a single effective Material Per Unit rate; other cases remain unresolved".into());
-                        }
+                let empty_expenses = ri.and_then(|r| resources.get(r)).is_some_and(cost_basis::explicitly_empty);
+                if empty_expenses && units.is_some() {
+                    line.budget_minor = Some(0);
+                    line.actual_minor = actual.is_none_or(|value| millionths(value).is_ok()).then_some(0);
+                    line.remaining_minor = remaining.is_none_or(|value| millionths(value).is_ok()).then_some(0);
+                    line.planned_cumulative_minor = Some(0);
+                    line.unresolved_reasons.push(cost_basis::EMPTY_EXPENSE_POLICY.into());
+                    if line.actual_minor.is_none() || line.remaining_minor.is_none() {
+                        line.unresolved_reasons
+                            .push("Stored actual/remaining units are invalid; their monetary fields remain unresolved even with empty expenses".into());
                     }
-                    _ => line.unresolved_reasons.push("Cost requires a resource, valid units and resolved working calendar allocation".into()),
+                } else {
+                    match (ri.and_then(|r| resources.get(r)), t.planned.as_ref(), units) {
+                        (Some(r), Some(p), Some(u)) => {
+                            if matches!(r.kind_storage_byte, Some(1..=3)) {
+                                match time_cost(r, p, u, t.nominal_day_seconds, None) {
+                                    Ok(plan) => {
+                                        line.budget_minor = Some(plan.budget_minor);
+                                        line.unresolved_reasons.extend(plan.reasons);
+                                        if t.stored.status_storage_value == 1 && actual == Some(0.) && remaining.and_then(|v| millionths(v).ok()) == Some(u) {
+                                            line.actual_minor = Some(0);
+                                            line.remaining_minor = line.budget_minor;
+                                            line.unresolved_reasons.push("Planned-status zero actual/full remaining follows the isolated paid-resource controls; other statuses remain unattributed".into());
+                                        }
+                                    }
+                                    Err(reason) => line.unresolved_reasons.push(reason),
+                                }
+                            } else {
+                                line.budget_minor = cost_for_work(r, p, u, None).map_err(|e| line.unresolved_reasons.push(e)).ok();
+                            }
+                            if let Some(amount) = constant_per_unit(r, p) {
+                                line.actual_minor =
+                                    actual.and_then(|v| millionths(v).ok()).and_then(|v| rounded(i128::from(amount) * i128::from(v), SCALE).ok());
+                                line.remaining_minor =
+                                    remaining.and_then(|v| millionths(v).ok()).and_then(|v| rounded(i128::from(amount) * i128::from(v), SCALE).ok());
+                            } else if line.actual_minor.is_none() || line.remaining_minor.is_none() {
+                                line.unresolved_reasons.push("Actual/remaining resource cost has no admitted formula for these inputs".into());
+                            }
+                        }
+                        _ => line.unresolved_reasons.push("Cost requires a resource, valid units and resolved working calendar allocation".into()),
+                    }
                 }
                 charge_line(&mut derived_text_bytes, &line)?;
                 lines.push(PreparedLine { line, task_index, resource_index: ri, planned_units: units, fixed_direct: false });
@@ -632,7 +712,8 @@ impl ProjectModel {
                     return Err("Duplicate direct cost in one task".into());
                 }
                 let amount = (d.type_storage_value == 1).then(|| minor(d.amount_storage)).flatten();
-                let mut reasons = vec!["Fixed task direct cost has no verified actual/remaining/time-phasing policy".into()];
+                let mut reasons =
+                    vec!["Budgeted direct costs are separate from actual expenses; per-budget-item actual/remaining attribution remains unresolved".into()];
                 if amount.is_none() {
                     reasons.push("Unsupported direct cost type or amount".into());
                 }
@@ -658,9 +739,81 @@ impl ProjectModel {
         if cancelled() {
             return Err("Project model preparation cancelled".into());
         }
-        Ok(Self { tasks, resources, model_errors: errors, profiles, prepared, assignments, preview_assignments, resource_profile_effects, lines })
+        let expense_ledger = crate::project_expenses::Ledger::from_metadata(metadata, &mut cancelled)?;
+        Ok(Self {
+            expense_ledger,
+            tasks,
+            resources,
+            model_errors: errors,
+            profiles,
+            prepared,
+            assignments,
+            preview_assignments,
+            effects_assignments,
+            visual_assignments,
+            resource_profile_effects,
+            lines,
+        })
     }
 
+    fn visual_effect(
+        &self,
+        resource: &str,
+        focus: i64,
+        mode: DateMode,
+        phase: &PhaseState,
+    ) -> Result<Option<crate::project_visuals::AppearanceEffect>, String> {
+        use crate::project_visuals::{self, ProgressBasis};
+        let action = match phase {
+            PhaseState::Resolved { phase: sim::Phase::InstallActive, .. } => 1,
+            PhaseState::Resolved { phase: sim::Phase::MaintainActive, .. } => 4,
+            _ => return Ok(None),
+        };
+        let entries = self.visual_assignments.get(resource).ok_or("Appearance assignments are unavailable")?;
+        let mut common = None;
+        let mut progress = 0f64;
+        let mut sources = Vec::new();
+        let mut basis = ProgressBasis::ElapsedWallclock;
+        for (task_index, profile_index) in entries {
+            let task = self.tasks.get(*task_index).ok_or("Appearance task index is invalid")?;
+            let dates = if mode == DateMode::Best { task.best_start.zip(task.best_finish) } else { task.planned_start.zip(task.planned_finish) };
+            let Some((start, finish)) = dates else { continue };
+            if start > focus || focus >= finish {
+                continue;
+            }
+            let profile = self.profiles.get(*profile_index).and_then(|p| p.decoded.as_ref()).ok_or("Active appearance has no admitted decoded phase")?;
+            if profile.action_storage != action {
+                continue;
+            }
+            let active = profile.phases.first().ok_or("Active phase block is absent")?;
+            if common.is_some_and(|other| other != active) {
+                return Err("Overlapping assignments have different effects; no clipping or transparency precedence is inferred".into());
+            }
+            common = Some(active);
+            let paused = active.trailing_flags_storage.get(2).copied() == Some(1);
+            let value = if paused {
+                let planned = self.prepared.get(*task_index).and_then(|t| t.planned.as_ref()).ok_or("Pause needs resolved task working segments")?;
+                if task.planned_start.zip(task.planned_finish) != Some((start, finish)) {
+                    return Err("Pause for shifted Actual/Best dates needs separately validated calendar allocation".into());
+                }
+                basis = ProgressBasis::WorkingCalendar;
+                project_visuals::working_progress(planned, focus)?
+            } else {
+                project_visuals::elapsed_progress(start, finish, focus)?
+            };
+            progress = progress.max(value);
+            sources.push(task.guid.clone());
+        }
+        let active = common.ok_or("No active source task supplies appearance effects")?;
+        let mut effect = project_visuals::active_effect(active, progress, basis)?;
+        if sources.len() > 1 {
+            effect
+                .limitations
+                .push("Identical simultaneous effects use the declared maximum-progress union; native overlap precedence is not established".into());
+        }
+        effect.source_tasks = sources;
+        Ok(Some(effect))
+    }
     pub fn page_tasks(&self, offset: usize, limit: usize) -> Page<TaskView> {
         page(&self.tasks, offset, limit)
     }
@@ -718,15 +871,34 @@ impl ProjectModel {
         let assignments = match appearance_policy {
             AppearancePolicy::Strict => &self.assignments,
             AppearancePolicy::IntervalPreview => &self.preview_assignments,
+            AppearancePolicy::ProfileEffectsPreview => &self.effects_assignments,
         };
         for r in &self.resources {
             if cancelled() {
                 unresolved.push("Project evaluation cancelled".into());
                 break;
             }
-            let effects = self.resource_profile_effects.get(&r.guid).cloned().unwrap_or_default();
+            let mut effects = if appearance_policy == AppearancePolicy::ProfileEffectsPreview {
+                Vec::new()
+            } else {
+                self.resource_profile_effects.get(&r.guid).cloned().unwrap_or_default()
+            };
             match sim::evaluate_resource(&simulation_tasks, assignments, &r.guid, WallClock(focus)) {
                 Ok(p) => {
+                    let appearance_effect = if appearance_policy == AppearancePolicy::ProfileEffectsPreview {
+                        match self.visual_effect(&r.guid, focus, date_mode, &p.state) {
+                            Ok(effect) => effect,
+                            Err(reason) => {
+                                effects.push(reason);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(effect) = &appearance_effect {
+                        effects.extend(effect.limitations.iter().cloned());
+                    }
                     let reason = match &p.state {
                         PhaseState::Unresolved { reason } => Some(reason.remediation().to_owned()),
                         _ => None,
@@ -737,6 +909,7 @@ impl ProjectModel {
                         provenance: p.provenance,
                         unresolved_reason: reason,
                         unresolved_profile_effects: effects,
+                        appearance_effect,
                     });
                 }
                 Err(e) => resource_phases.push(ResourcePhase {
@@ -745,22 +918,45 @@ impl ProjectModel {
                     provenance: Provenance::CallerDeclared,
                     unresolved_reason: Some(e.remediation().into()),
                     unresolved_profile_effects: effects,
+                    appearance_effect: None,
                 }),
             }
         }
         let mut costs=CostSummary{semantics:"Experimental declared linear utilization over decoded working segments; currency/unit conversion absent; nearest-cent inputs and final per-assignment rounding; partial totals exclude unresolved lines".into(),..Default::default()};
+        match self.expense_ledger.evaluate(focus, &mut *cancelled) {
+            Ok(summary) => costs.recorded_actual_expenses = Some(summary),
+            Err(reason) => unresolved.push(reason),
+        }
         for prepared in &self.lines {
             if cancelled() {
                 unresolved.push("Project evaluation cancelled".into());
                 break;
             }
             let mut line = prepared.line.clone();
+            if prepared.fixed_direct {
+                match self
+                    .tasks
+                    .get(prepared.task_index)
+                    .zip(line.budget_minor)
+                    .ok_or_else(|| "Direct Planned Value inputs are unavailable".to_string())
+                    .and_then(|(task, amount)| direct_planned_value(task, amount, focus))
+                {
+                    Ok(value) => line.planned_cumulative_minor = Some(value),
+                    Err(reason) => line.unresolved_reasons.push(reason),
+                }
+            }
             if !prepared.fixed_direct
                 && let Some(((resource, task), units)) =
                     prepared.resource_index.and_then(|r| self.resources.get(r)).zip(self.prepared.get(prepared.task_index)).zip(prepared.planned_units)
                 && let Some(work) = &task.planned
             {
-                match cost_for_work(resource, work, units, Some(focus)) {
+                let cumulative = if matches!(resource.kind_storage_byte, Some(1..=3)) && !cost_basis::explicitly_empty(resource) {
+                    time_cost(resource, work, units, task.nominal_day_seconds, Some(focus))
+                        .and_then(|plan| plan.planned_cumulative_minor.ok_or("Time-rate planned value is unavailable".into()))
+                } else {
+                    cost_for_work(resource, work, units, Some(focus))
+                };
+                match cumulative {
                     Ok(v) => line.planned_cumulative_minor = Some(v),
                     Err(e) => {
                         if !line.unresolved_reasons.contains(&e) {
@@ -919,8 +1115,8 @@ fn parse_resource(value: &Value) -> Result<ResourceCostView, String> {
     let kind = value.get("kind_storage_byte").and_then(Value::as_u64).and_then(|v| u8::try_from(v).ok());
     let unit_storage_byte = value.get("unit_storage_byte").and_then(Value::as_u64).and_then(|v| u8::try_from(v).ok());
     let mut reasons = Vec::new();
-    if kind != Some(4) {
-        reasons.push("Cost formulas are admitted only for Material kind4; other resource kinds remain unresolved".into());
+    if !matches!(kind, Some(1..=4)) {
+        reasons.push("Cost formulas for this resource kind are unsupported".into());
     }
     let groups = value.get("cost_storage_groups").and_then(Value::as_array);
     if groups.is_some_and(|v| v.len() > LIMIT) {
@@ -963,6 +1159,43 @@ fn parse_resource(value: &Value) -> Result<ResourceCostView, String> {
     }
     Ok(ResourceCostView { guid, name, kind_storage_byte: kind, unit_storage_byte, rates, unresolved_reasons: reasons })
 }
+fn time_cost(
+    resource: &ResourceCostView,
+    work: &WorkAllocation,
+    units: u64,
+    nominal: Option<u64>,
+    focus: Option<i64>,
+) -> Result<crate::project_time_rates::TimeRatePlan, String> {
+    use crate::project_time_rates::{EffectiveRate, TimeRateInput};
+    if resource.rates.len() != 1 {
+        return Err("Time-rate preview requires exactly one effective rate group".into());
+    }
+    let mut rates = Vec::new();
+    for group in &resource.rates {
+        if group.items.len() != 1 {
+            return Err("Time-rate preview needs one item in its single effective group".into());
+        }
+        let item = group.items.first().ok_or("Time-rate item is absent")?;
+        rates.push(EffectiveRate {
+            effective_wallclock: group.effective_wallclock.ok_or("Time-rate date is unresolved")?,
+            type_storage: item.type_storage,
+            amount_minor: item.amount_minor.ok_or("Time-rate amount is invalid")?,
+        });
+    }
+    let input = TimeRateInput {
+        kind_storage: resource.kind_storage_byte.ok_or("Resource kind is unresolved")?,
+        unit_storage: resource.unit_storage_byte,
+        rates,
+        normalized_units_millionths: units,
+        nominal_day_seconds: nominal,
+    };
+    let mut plan = crate::project_time_rates::evaluate(&input, work, focus)?;
+    if nominal.is_some() {
+        plan.reasons
+            .push("Nominal day length is conservatively inferred from uniform referenced local calendar day types; it is not a decoded native setting".into());
+    }
+    Ok(plan)
+}
 fn admitted_rates(resource: &ResourceCostView) -> Result<Vec<(i64, i64, u32)>, String> {
     if resource.kind_storage_byte != Some(4) {
         return Err("Unsupported resource kind for Material cost formula".into());
@@ -996,6 +1229,12 @@ fn constant_per_unit(resource: &ResourceCostView, work: &WorkAllocation) -> Opti
     (rates.len() == 1 && first.2 == 9 && first.0 <= work.requested_start_wallclock).then_some(first.1)
 }
 fn cost_for_work(resource: &ResourceCostView, work: &WorkAllocation, units: u64, focus: Option<i64>) -> Result<i64, String> {
+    if units > 1_000_000_000_000_000 {
+        return Err("Unit quantity exceeds the supported bound".into());
+    }
+    if cost_basis::explicitly_empty(resource) {
+        return Ok(0);
+    }
     let rates = admitted_rates(resource)?;
     if work.segments.len().checked_mul(rates.len()).is_none_or(|n| n > 1_000_000) {
         return Err("Working allocation/rate lookup budget exceeded".into());
@@ -1064,6 +1303,78 @@ mod tests {
         assert!(!model.model_errors.is_empty());
     }
     #[test]
+    fn profile_effect_preview_uses_framed_action_growth_and_active_opacity() {
+        let mut raw = vec![0u8; 247];
+        raw[..2].copy_from_slice(&[0, 1]);
+        raw[2..6].copy_from_slice(&1u32.to_le_bytes());
+        for at in [6, 69, 176] {
+            raw[at..at + 4].copy_from_slice(&[0x10, 0x48, 0x69, 0x23]);
+            raw[at + 4..at + 6].copy_from_slice(&[0, 1]);
+            for (axis, value) in [0.25f32, 0.5, 0.75].into_iter().enumerate() {
+                raw[at + 6 + axis * 4..at + 10 + axis * 4].copy_from_slice(&value.to_le_bytes());
+            }
+            raw[at + 18..at + 22].copy_from_slice(&35u32.to_le_bytes());
+            raw[at + 22..at + 25].copy_from_slice(&[0, 1, 0]);
+            raw[at + 25..at + 29].copy_from_slice(&4u32.to_le_bytes());
+            raw[at + 53..at + 59].copy_from_slice(&[0, 1, 0, 1, 0, 1]);
+            raw[at + 59..at + 63].copy_from_slice(&[0x6c, 0x4a, 0x92, 0x90]);
+        }
+        raw[132..136].copy_from_slice(&[0x7a, 0x54, 0xaf, 0x39]);
+        raw[140..144].copy_from_slice(&[0x16, 0xe4, 0x99, 0x6f]);
+        raw[239..243].copy_from_slice(&[0x3d, 0xc8, 0xb0, 0x03]);
+        let hex = raw.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let mut data = metadata();
+        data["resources"] = json!([{"guid":"resource","name":"Component","kind_storage_byte":4}]);
+        data["tasks"][0]["assignments"] = json!([{"resource_guid":"resource","profile_guid":"profile","planned_units":1.}]);
+        data["definition_storage"] = json!({"profile":{"section":"Use Profiles","name":"Build horizontally","raw_tail_hex":hex}});
+        let model = ProjectModel::from_metadata(&data).unwrap();
+        assert_eq!(model.profiles[0].direction_candidate, Some(4));
+        let frame = model.evaluate_with_policy(215, DateMode::Best, AppearancePolicy::ProfileEffectsPreview, || false).unwrap();
+        let effect = frame.resource_phases[0].appearance_effect.as_ref().unwrap();
+        assert_eq!(effect.progress, 0.5);
+        assert_eq!(effect.opacity, Some(0.35));
+        assert_eq!(effect.growth_direction, Some([1., 0., 0.]));
+        assert_eq!(effect.color, Some([0.25, 0.5, 0.75]));
+        assert!(model.evaluate(215, DateMode::Best).resource_phases[0].appearance_effect.is_none());
+    }
+    #[test]
+    fn recorded_expenses_do_not_replace_budget_or_planned_value_lines() {
+        let data = json!({"schema_version":4,"tasks":[{"guid":"expense-task","name":"Synthetic task",
+            "planned_start_wallclock_scalar":0,"duration_storage_scalar":100,"status_storage_value":2,
+            "date_storage_windows":[0,UNSET,100,UNSET],"assignments":[],
+            "direct_costs":[{"guid":"budget-item","name":"Budget only","amount_storage":120.,"type_storage_value":1}],
+            "actual_expense_coverage":{"progress_collection_present":true,"report_collection_complete":true,
+                "report_count":1,"item_count":1,"policy":"observed_type5_report_with_fixed_cost_items"},
+            "actual_expense_reports":[{"report_guid":"report-actual","date_storage_scalar":100,"label_storage":"Original fixture",
+                "report_duration_storage_scalar":0,"type_storage_value":5,"items":[{"item_guid":"item-actual","name":"Recorded actual",
+                "amount_storage":30.,"type_storage_value":1,"definition_reference_guid_storage":"00000000-0000-0000-0000-000000000000"}]}]
+        }],"resources":[],"definition_storage":{}});
+        let model = ProjectModel::from_metadata(&data).unwrap();
+        for (focus, expected) in [(99, 0), (100, 3000)] {
+            let frame = model.evaluate(focus, DateMode::Best);
+            assert_eq!(frame.costs.direct_budget_minor, 12000);
+            assert!(frame.costs.lines.iter().all(|line| line.actual_minor.is_none()));
+            let recorded = frame.costs.recorded_actual_expenses.as_ref().unwrap();
+            assert_eq!(recorded.recorded_total_minor, Some(3000));
+            assert_eq!(recorded.recorded_at_focus_minor, Some(expected));
+            assert_eq!(recorded.items.len(), 1);
+        }
+        let frame = ProjectModel::from_metadata(&metadata()).unwrap().evaluate(210, DateMode::Best);
+        let recorded = frame.costs.recorded_actual_expenses.as_ref().unwrap();
+        assert_eq!(recorded.recorded_total_minor, None);
+        assert_eq!(recorded.unknown_task_collections, 1);
+    }
+    #[test]
+    fn malformed_present_profile_storage_cannot_become_name_only_legacy_install() {
+        for raw in [json!("x"), json!("zz"), json!(42), json!("00".repeat(2049))] {
+            let mut data = metadata();
+            data["definition_storage"] = json!({"profile":{"section":"Use Profiles","name":"Install","raw_tail_hex":raw}});
+            let model = ProjectModel::from_metadata(&data).unwrap();
+            assert_eq!(model.profiles[0].strict_profile, DefaultProfile::Unsupported);
+            assert!(model.profiles[0].decoded.is_none());
+        }
+    }
+    #[test]
     fn planned_dates_never_add_elapsed_duration() {
         let model = ProjectModel::from_metadata(&metadata()).unwrap();
         let frame = model.evaluate(110, DateMode::Planned);
@@ -1084,6 +1395,21 @@ mod tests {
         assert_eq!(minor(-1.), None);
         assert!(millionths(f64::NAN).is_err());
         assert_eq!(rounded(5, 2), Ok(3));
+    }
+    #[test]
+    fn direct_planned_value_uses_elapsed_time_separately_from_working_rates() {
+        let mut task = ProjectModel::from_metadata(&metadata()).unwrap().tasks.remove(0);
+        task.planned_start = Some(0);
+        task.planned_finish = Some(56 * 3600);
+        assert_eq!(direct_planned_value(&task, 12000, 6 * 3600 + 58 * 60).unwrap(), 1493);
+        assert_eq!(direct_planned_value(&task, 12000, 32 * 3600).unwrap(), 6857);
+        assert_eq!(direct_planned_value(&task, 12000, 56 * 3600).unwrap(), 12000);
+        assert_eq!(direct_planned_value(&task, 12000, -1).unwrap(), 0);
+        task.schedule_kind = ScheduleKind::Milestone;
+        assert!(direct_planned_value(&task, 12000, 0).is_err());
+        task.planned_start = None;
+        task.planned_finish = None;
+        assert_eq!(direct_planned_value(&task, 0, 0).unwrap(), 0);
     }
     fn work() -> WorkAllocation {
         WorkAllocation {
@@ -1219,7 +1545,7 @@ mod tests {
         let mut tail = vec![0u8; 247];
         tail[2..6].copy_from_slice(&1u32.to_le_bytes());
         tail[24..28].copy_from_slice(&55u32.to_le_bytes());
-        tail[30..34].copy_from_slice(&3u32.to_le_bytes());
+        tail[31..35].copy_from_slice(&3u32.to_le_bytes());
         let hex = tail.iter().map(|b| format!("{b:02x}")).collect::<String>();
         data["tasks"][0]["assignments"] = json!([{"resource_guid":"part","profile_guid":"profile","planned_units":1.}]);
         data["resources"] = json!([{"guid":"part","name":"Piece","kind_storage_byte":4,"cost_storage_groups":[]}]);

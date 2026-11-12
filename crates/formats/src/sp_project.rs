@@ -1,5 +1,6 @@
 //! Bounded experimental importer for the observed 6.5.5.28 project layout.
 //! Pure memory parsing; schedule and cost values retain raw storage semantics.
+mod actual_expenses;
 mod definitions;
 mod resource_tree;
 mod scene_geometry;
@@ -137,54 +138,8 @@ struct ProgressRecord {
     date_storage_scalar: u64,
     duration_storage_scalar: u64,
     type_storage_value: u32,
-}
-// Admitted only: observed optional list with 88-byte records, empty label/nested list.
-fn progress_records(data: &[u8], at: usize, budget: usize) -> Result<(Vec<ProgressRecord>, usize)> {
-    let flag = *bytes(data, at, 1)?.first().ok_or_else(|| fail("truncated", "Missing progress flag"))?;
-    if flag == 0 {
-        return Ok((Vec::new(), 0));
-    }
-    if flag != 1 {
-        return Err(Failure {
-            code: "unsupported_layout",
-            message: "Unknown progress list flag; earlier record-layout divergence is also possible".into(),
-            section: None,
-            offset: Some(at),
-        });
-    }
-    let open = checked_add(at, 1)?;
-    marker(data, open, OPEN)?;
-    let count = count_at(data, checked_add(open, 4)?)?;
-    if count > budget {
-        return Err(fail("limit", "Total relationships/progress exceeds 10000"));
-    }
-    let mut cursor = checked_add(open, 8)?;
-    let mut result = Vec::new();
-    for _ in 0..count {
-        let record = bytes(data, cursor, 88)?;
-        marker(record, 0, &[0x32, 0xe6, 0xb5, 0x72])?;
-        marker(record, 64, &[255, 254, 255, 0])?;
-        marker(record, 68, OPEN)?;
-        if u32_at(record, 72)? != 0 {
-            return Err(fail("unsupported_layout", "Nested progress lists are outside this reader"));
-        }
-        marker(record, 76, CLOSE)?;
-        marker(record, 80, &[0xce, 0xac, 0x72, 0xc9])?;
-        marker(record, 84, &[0; 4])?;
-        result.push(ProgressRecord {
-            offset: cursor,
-            bytes: 88,
-            opaque_guid: guid_at(record, 12)?,
-            date_storage_scalar: u64_at(record, 44)?,
-            duration_storage_scalar: u64_at(record, 52)?,
-            type_storage_value: u32_at(record, 60)?,
-        });
-        cursor = checked_add(cursor, 88)?;
-    }
-    marker(data, cursor, CLOSE)?;
-    let end = checked_add(cursor, 4)?;
-    let extra = end.checked_sub(open).ok_or_else(|| fail("limit", "Progress length underflow"))?;
-    Ok((result, extra))
+    label_storage: String,
+    ordinal_storage: u32,
 }
 
 #[derive(Serialize)]
@@ -205,6 +160,8 @@ struct Task {
     duration_storage_scalar: u64,
     status_storage_value: u32,
     progress_records: Vec<ProgressRecord>,
+    actual_expense_reports: Vec<actual_expenses::ExpenseReport>,
+    actual_expense_coverage: actual_expenses::ExpenseCoverage,
     assignments: Vec<Assignment>,
     links: Vec<Link>,
     direct_costs: Vec<DirectCost>,
@@ -328,15 +285,17 @@ fn user_values(data: &[u8], at: usize, budget: usize) -> Result<(Vec<UserValue>,
     marker(data, pos, CLOSE)?;
     Ok((rows, checked_add(pos, 4)?.checked_sub(checked_add(at, 1)?).ok_or_else(|| fail("limit", "User values size"))?))
 }
-struct TaskReader<'a> {
+struct TaskReader<'a, 'b> {
     data: &'a [u8],
+    callback: &'b mut dyn FnMut(f32) -> bool,
     tasks: Vec<Task>,
     seen: BTreeSet<String>,
     records: usize,
     relationships: usize,
 }
-impl TaskReader<'_> {
+impl TaskReader<'_, '_> {
     fn task(&mut self, start: usize, parent: Option<&str>, depth: usize) -> Result<usize> {
+        check(self.callback, 0.5)?;
         if depth > 64 || self.records >= RECORD_LIMIT {
             return Err(fail("limit", "Task nesting or total count exceeds budget"));
         }
@@ -422,8 +381,9 @@ impl TaskReader<'_> {
         extra = checked_add(extra, cost_extra)?;
         let progress_at = checked_add(checked_add(name_end, 50)?, extra)?;
         let budget = RECORD_LIMIT.checked_sub(self.relationships).ok_or_else(|| fail("limit", "Relationship budget"))?;
-        let (progress_records, progress_extra) = progress_records(self.data, progress_at, budget)?;
-        self.relationships = checked_add(self.relationships, progress_records.len())?;
+        let reports = actual_expenses::parse(self.data, progress_at, budget, self.callback)?;
+        let progress_extra = reports.extra;
+        self.relationships = checked_add(self.relationships, reports.records_used)?;
         let codes_at = checked_add(checked_add(checked_add(name_end, 184)?, extra)?, progress_extra)?;
         let (activity_code_refs, id_at) = code_references(self.data, codes_at, RECORD_LIMIT.saturating_sub(self.relationships))?;
         self.relationships = checked_add(self.relationships, activity_code_refs.len())?;
@@ -465,7 +425,9 @@ impl TaskReader<'_> {
             planned_start_wallclock_scalar,
             duration_storage_scalar,
             status_storage_value,
-            progress_records,
+            progress_records: reports.records,
+            actual_expense_reports: reports.reports,
+            actual_expense_coverage: reports.coverage,
             assignments,
             links,
             direct_costs,
@@ -475,10 +437,10 @@ impl TaskReader<'_> {
         Ok(end)
     }
 }
-fn tasks(data: &[u8]) -> Result<Vec<Task>> {
+fn tasks(data: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Vec<Task>> {
     marker(data, 24, OPEN)?;
     let n = count_at(data, 28)?;
-    let mut reader = TaskReader { data, tasks: Vec::new(), seen: BTreeSet::new(), records: 0, relationships: 0 };
+    let mut reader = TaskReader { data, callback, tasks: Vec::new(), seen: BTreeSet::new(), records: 0, relationships: 0 };
     let mut at = 32;
     for _ in 0..n {
         at = reader.task(at, None, 0)?;
@@ -547,13 +509,27 @@ struct Coverage {
     task_link_refs_checked: bool,
     profile_code_user_definition_records_checked: bool,
 }
-fn inspect_container(c: Container, source_sha256: String, tasks_only: bool) -> Result<Evidence> {
+fn inspect_container(c: Container, source_sha256: String, tasks_only: bool, callback: &mut dyn FnMut(f32) -> bool) -> Result<Evidence> {
     let task_data = c.decoded.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section is missing"))?;
     let resource_data = c.decoded.get("Resources").ok_or_else(|| fail("missing_dependency", "Resources section is missing"))?;
-    let tasks = tasks(task_data).map_err(|mut e| {
+    let tasks = tasks(task_data, callback).map_err(|mut e| {
         e.section = Some("Tasks".into());
         e
     })?;
+    let mut expense_identities = BTreeSet::new();
+    for task in &tasks {
+        check(callback, 0.5)?;
+        for report in &task.actual_expense_reports {
+            if !expense_identities.insert(report.report_guid.as_str()) {
+                return Err(fail("invalid_identity", "Duplicate actual expense report identity across Tasks"));
+            }
+            for item in &report.items {
+                if !expense_identities.insert(item.item_guid.as_str()) {
+                    return Err(fail("invalid_identity", "Duplicate actual expense item identity across Tasks"));
+                }
+            }
+        }
+    }
     let resources = if tasks_only {
         Vec::new()
     } else {
@@ -653,6 +629,20 @@ fn inspect_container(c: Container, source_sha256: String, tasks_only: bool) -> R
 pub struct ImportedProject {
     pub scene: scene_bundle::Scene,
     pub metadata: serde_json::Value,
+}
+
+/// Strict project metadata without inspecting or admitting a drawable scene.
+#[derive(Debug)]
+pub struct ImportedMetadata {
+    pub source_sha256: String,
+    pub metadata: serde_json::Value,
+    pub coverage: MetadataCoverage,
+}
+
+/// Metadata reference validation does not establish geometry validity.
+#[derive(Debug, Serialize)]
+pub struct MetadataCoverage {
+    pub geometry_validated: bool,
 }
 #[derive(Serialize)]
 struct Binding {
@@ -798,6 +788,35 @@ pub fn parse(raw: &[u8], mut keep_going: impl FnMut(f32) -> bool) -> std::result
     })
     .map_err(format_error)
 }
+
+/// Read admitted Tasks, Resources and their definitions independently of geometry.
+/// Geometry sections remain opaque; malformed metadata and missing references fail.
+/// Returning false cooperatively cancels, as with [`parse`].
+pub fn parse_metadata(raw: &[u8], mut keep_going: impl FnMut(f32) -> bool) -> std::result::Result<ImportedMetadata, FormatError> {
+    let mut progress = 0.0f32;
+    let mut callback = |p: f32| {
+        progress = progress.max(p);
+        keep_going(progress)
+    };
+    (|| {
+        check(&mut callback, 0.)?;
+        let container = container(raw, &mut callback)?;
+        let mut source_hash = Sha256::new();
+        for chunk in raw.chunks(65536) {
+            check(&mut callback, 0.25)?;
+            source_hash.update(chunk);
+        }
+        let source_sha256 = format!("{:x}", source_hash.finalize());
+        check(&mut callback, 0.5)?;
+        let evidence = inspect_container(container, source_sha256.clone(), false, &mut callback)?;
+        let encoded = json(&evidence)?;
+        check(&mut callback, 0.9)?;
+        let metadata = serde_json::from_slice(&encoded).map_err(|_| fail("invalid_metadata", "Metadata representation"))?;
+        check(&mut callback, 1.)?;
+        Ok(ImportedMetadata { source_sha256, metadata, coverage: MetadataCoverage { geometry_validated: false } })
+    })()
+    .map_err(format_error)
+}
 fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<ImportedProject> {
     check(callback, 0.)?;
     let c = container(raw, callback)?;
@@ -825,7 +844,27 @@ fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Impo
         }
         geometry.section(&decoded, name, &index)?;
     }
-    let evidence = inspect_container(c, source_sha.clone(), false)?;
+    let mut texture_sections = BTreeMap::new();
+    for name in ["TextureDefinitions", "GraphicalImages"] {
+        if let Some(section) = c.sections.get(name) {
+            let prefix = checked_add(name.len(), 2)?;
+            let data = bytes(
+                raw,
+                checked_add(section.file_offset, prefix)?,
+                section.stored_bytes.checked_sub(prefix).ok_or_else(|| fail("truncated", "Texture wrapper"))?,
+            )?;
+            let decoded = inflate(data, 64 * 1024 * 1024, geometry.keep_callback())?;
+            texture_sections.insert(name, decoded);
+        }
+    }
+    let textures = match (texture_sections.get("TextureDefinitions"), texture_sections.get("GraphicalImages")) {
+        (Some(definitions), Some(images)) => Some(std::sync::Arc::new(
+            crate::project_textures::parse(definitions, images, |p| (geometry.keep_going)(p)).map_err(|e| fail("unsupported_texture", e.to_string()))?,
+        )),
+        (None, None) => None,
+        _ => return Err(fail("missing_dependency", "Texture definitions and cached images must be paired")),
+    };
+    let evidence = inspect_container(c, source_sha.clone(), false, geometry.keep_callback())?;
     let mut bindings = Vec::new();
     if let Some(resources) = &evidence.resources {
         let byid = geometry.nodes.iter().map(|n| (n.guid.as_str(), n)).collect::<BTreeMap<_, _>>();
@@ -855,12 +894,11 @@ fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Impo
     let meshes = lines(&geometry.meshes)?;
     let instances = lines(&instances)?;
     let bindings = lines(&bindings)?;
-    drop(geometry);
-    check(callback, 0.75)?;
+    check(geometry.keep_callback(), 0.75)?;
     let project = json(&evidence)?;
     let manifest = json(&manifest)?;
     let metadata = serde_json::from_slice(&project).map_err(|_| fail("invalid_metadata", "Metadata representation"))?;
-    let scene = scene_bundle::parse(
+    let mut scene = scene_bundle::parse(
         scene_bundle::Inputs {
             manifest: &manifest,
             nodes: &nodes,
@@ -870,7 +908,7 @@ fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Impo
             project: &project,
             binary: &binary,
         },
-        |p| callback(0.75 + p * 0.25),
+        |p| (geometry.keep_going)(0.75 + p * 0.25),
     )
     .map_err(|e| match e {
         FormatError::TooLarge(s) => fail("limit", s),
@@ -878,6 +916,9 @@ fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Impo
         FormatError::Unsupported(s) => fail("unsupported_layout", s),
         FormatError::Malformed(s) => fail("invalid_scene", s),
     })?;
+    if let Some(assets) = textures {
+        scene_geometry::attach_textures(&mut scene, &geometry, assets);
+    }
     Ok(ImportedProject { scene, metadata })
 }
 
@@ -948,11 +989,18 @@ mod tests {
         b
     }
     fn project(geometry: Vec<u8>) -> Vec<u8> {
+        project_with_tasks(geometry, empty_section())
+    }
+    fn project_with_tasks(geometry: Vec<u8>, task_data: Vec<u8>) -> Vec<u8> {
         let names = ["Tasks", "Resources", "Use Profiles", "Activity Codes", "User Fields", "Entities", "IncludeLibrary", "Calendars"];
         let mut sections = Vec::new();
         for i in 0..48 {
             let name = names.get(i).map(|s| s.to_string()).unwrap_or_else(|| format!("Opaque{i}"));
-            let payload = if name == "Entities" { geometry.clone() } else { empty_section() };
+            let payload = match name.as_str() {
+                "Entities" => geometry.clone(),
+                "Tasks" => task_data.clone(),
+                _ => empty_section(),
+            };
             let mut stored = vec![1, name.len() as u8];
             stored.extend(name.as_bytes());
             stored.extend(miniz_oxide::deflate::compress_to_vec_zlib(&payload, 6));
@@ -982,6 +1030,62 @@ mod tests {
             b.extend(payload);
         }
         b
+    }
+    fn metadata_task_section(missing_predecessor: bool) -> Vec<u8> {
+        let mut task = vec![0; 29];
+        task[..4].copy_from_slice(&[0x76, 0x25, 0xec, 0x04]);
+        task[12..28].fill(0x11);
+        task.extend(OPEN);
+        task.extend(0u32.to_le_bytes());
+        task.extend(CLOSE);
+        task.extend([0; 4]);
+        task.extend(OPEN);
+        task.extend(u32::from(missing_predecessor).to_le_bytes());
+        if missing_predecessor {
+            let mut link = vec![0; 80];
+            link[..4].copy_from_slice(&[0xd1, 0xe3, 0xe7, 0x04]);
+            link[28..44].fill(0x22);
+            task.extend(link);
+        }
+        task.extend(CLOSE);
+        task.extend([0; 16]);
+        task.extend([255, 254, 255, 1, b'A', 0]);
+        task.extend([0; 184]);
+        task.extend([0xd0, 0xbc, 0xa1, 0x06]);
+        task.extend(0u32.to_le_bytes());
+        task.extend([0x2c, 0x57, 0xd9, 0xda]);
+        task.extend([255, 254, 255, 1, b'1', 0]);
+        let tail = task.len();
+        task.extend([0; 121]);
+        task[tail + 25..tail + 29].copy_from_slice(&1u32.to_le_bytes());
+        task[tail + 101..tail + 105].copy_from_slice(OPEN);
+        task[tail + 109..tail + 113].copy_from_slice(CLOSE);
+        task[tail + 113..tail + 117].copy_from_slice(&[0x92, 0xd4, 0x70, 0xa2]);
+        let mut section = vec![0; 24];
+        section.extend(OPEN);
+        section.extend(1u32.to_le_bytes());
+        section.extend(task);
+        section.extend(CLOSE);
+        section
+    }
+    #[test]
+    fn strict_metadata_reads_a_task_without_drawable_geometry() {
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        assert!(parse(&raw, |_| true).is_err());
+        let imported = parse_metadata(&raw, |_| true).unwrap();
+        assert!(!imported.coverage.geometry_validated);
+        assert_eq!(imported.metadata["tasks"][0]["name"], "A");
+        assert_eq!(imported.metadata["resources"].as_array().unwrap().len(), 0);
+        assert_eq!(imported.metadata["source_sha256"], imported.source_sha256);
+        assert_eq!(imported.metadata["coverage"]["assignment_resource_refs_checked"], true);
+        assert!(parse_metadata(&raw, |_| false).is_err());
+    }
+    #[test]
+    fn metadata_only_still_rejects_missing_task_references() {
+        let raw = project_with_tasks(empty_section(), metadata_task_section(true));
+        let error = parse_metadata(&raw, |_| true).unwrap_err();
+        assert!(matches!(error, FormatError::Malformed(_)), "{error:?}");
+        assert!(error.to_string().contains("Link references absent Task GUID"));
     }
     #[test]
     fn admitted_project_opens_and_retains_metadata() {

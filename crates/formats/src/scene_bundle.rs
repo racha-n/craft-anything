@@ -14,7 +14,7 @@ pub const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 /// Experimental candidate policy; native inheritance and appearance precedence are unverified.
 pub const SOURCE_COLOR_POLICY: &str = "experimental_nearest_explicit_diffuse_on_instance_path_native_precedence_unverified";
 /// Controlled active object RGB; only the explicit instance entity node supplies a value.
-pub const OBJECT_COLOR_POLICY: &str = "observed_entity_rgb_override_no_inheritance";
+pub const OBJECT_COLOR_POLICY: &str = "observed_outermost_entities_rgb_override_no_library_fallback";
 const MAX_NODES: usize = 100_000;
 const MAX_INSTANCES: usize = 100_000;
 const MAX_VERTICES: usize = 10_000_000;
@@ -84,6 +84,8 @@ struct StoredNode {
 }
 #[derive(Debug, Deserialize)]
 struct StoredMesh {
+    #[serde(default)]
+    texture_coordinates: Option<Vec<[f32; 2]>>,
     owner: String,
     vertex_count: usize,
     triangle_count: usize,
@@ -141,6 +143,9 @@ pub struct Instance {
 }
 #[derive(Debug)]
 pub struct Scene {
+    pub mesh_uvs: BTreeMap<usize, Vec<[f32; 2]>>,
+    pub mesh_textures: BTreeMap<usize, String>,
+    pub texture_assets: Option<std::sync::Arc<crate::project_textures::TextureAssets>>,
     pub id: String,
     pub source_sha256: String,
     pub unit_declaration: String,
@@ -409,7 +414,14 @@ pub fn parse(input: Inputs<'_>, mut keep_going: impl FnMut(f32) -> bool) -> Resu
     reserve(&mut gpu_indices, times(m.triangles, 12)?)?;
     let mut end = 0usize;
     let mut triangles = 0usize;
+    let mut mesh_uvs = BTreeMap::new();
     for (mesh_id, sm) in stored_meshes.iter().enumerate() {
+        if let Some(uvs) = &sm.texture_coordinates {
+            if uvs.len() != sm.vertex_count || uvs.iter().flatten().any(|v| !v.is_finite()) {
+                return Err(malformed("mesh texture coordinates"));
+            }
+            mesh_uvs.insert(mesh_id, uvs.clone());
+        }
         if !keep_going(0.1 + 0.5 * mesh_id as f32 / stored_meshes.len().max(1) as f32) {
             return Err(Error::Unsupported("scene parsing cancelled".into()));
         }
@@ -508,6 +520,7 @@ pub fn parse(input: Inputs<'_>, mut keep_going: impl FnMut(f32) -> bool) -> Resu
         let mut owners = BTreeSet::new();
         let mut matrix = math::IDENTITY;
         let mut source_color = None;
+        let mut object_color = None;
         let mut previous: Option<&StoredNode> = None;
         let mut entity = None;
         let mut h = Sha256::new();
@@ -526,6 +539,11 @@ pub fn parse(input: Inputs<'_>, mut keep_going: impl FnMut(f32) -> bool) -> Resu
             }
             if node.section == "Entities" {
                 entity = Some(node.guid.as_str());
+                // Paired native readbacks establish an outer group override over inner/leaf RGB.
+                // IncludeLibrary colours never supply this separate override channel.
+                if object_color.is_none() {
+                    object_color = node.source_object_color.map(|rgb| rgb.map(|v| v as f32));
+                }
             }
             if let Some(rgb) = node.source_diffuse {
                 source_color = Some(rgb.map(|v| v as f32));
@@ -569,8 +587,8 @@ pub fn parse(input: Inputs<'_>, mut keep_going: impl FnMut(f32) -> bool) -> Resu
         if let Some(rgb) = source_color {
             source_colors.insert(instances.len(), rgb);
         }
-        if let Some(rgb) = ids.get(si.entity_node_guid.as_str()).and_then(|index| nodes.get(*index)).and_then(|node| node.source_object_color) {
-            object_colors.insert(instances.len(), rgb.map(|v| v as f32));
+        if let Some(rgb) = object_color {
+            object_colors.insert(instances.len(), rgb);
         }
         instances.push(Instance {
             id: si.instance_id,
@@ -608,6 +626,9 @@ pub fn parse(input: Inputs<'_>, mut keep_going: impl FnMut(f32) -> bool) -> Resu
         }
     }
     Ok(Scene {
+        mesh_uvs,
+        mesh_textures: BTreeMap::new(),
+        texture_assets: None,
         id: format!("{:x}", fingerprint.finalize()),
         source_sha256: m.source_sha256,
         unit_declaration: m.coordinate_unit,
@@ -666,6 +687,37 @@ impl Scene {
     }
     /// Surface picking is bounded and reports incomplete when work or singular transforms prevent certainty.
     pub fn pick(&self, origin: Point, direction: Point, filters: &Visibility, mut keep_going: impl FnMut() -> bool) -> Result<Pick> {
+        self.pick_clipped(origin, direction, filters, &BTreeMap::new(), &mut keep_going)
+    }
+    /// Explicit original-world half-spaces retain points where dot(normal, point) + d <= 0.
+    /// They clip existing surfaces only; no synthetic cap surfaces are introduced.
+    pub fn pick_clipped(
+        &self,
+        origin: Point,
+        direction: Point,
+        filters: &Visibility,
+        planes: &BTreeMap<usize, [f64; 4]>,
+        mut keep_going: impl FnMut() -> bool,
+    ) -> Result<Pick> {
+        if planes.len() > 100_000
+            || planes
+                .iter()
+                .any(|(id, p)| self.instances.get(*id).is_none() || p.iter().any(|n| !n.is_finite() || n.abs() > 1e30) || p.iter().take(3).all(|n| *n == 0.))
+        {
+            return Err(malformed("invalid or oversized scene clipping planes"));
+        }
+        let mut normalized_planes = BTreeMap::new();
+        for (id, plane) in planes {
+            let [x, y, z, d] = *plane;
+            let scale = x.abs().max(y.abs()).max(z.abs());
+            let [x, y, z] = [x / scale, y / scale, z / scale];
+            let length = x.hypot(y).hypot(z);
+            let plane = [x / length, y / length, z / length, (d / scale) / length];
+            if plane.iter().any(|n| !n.is_finite()) {
+                return Err(malformed("clipping plane cannot be normalized"));
+            }
+            normalized_planes.insert(*id, plane);
+        }
         if !math::finite(origin) || origin.iter().any(|v| v.abs() > 1e15) {
             return Err(malformed("invalid picking origin"));
         }
@@ -729,6 +781,13 @@ impl Scene {
                 }
                 let t = math::dot(e2, q) / det;
                 if t >= 0. && t < nearest && t.is_finite() {
+                    if let Some(plane) = normalized_planes.get(&id) {
+                        let point = math::add(origin, math::scale(direction, t));
+                        let distance = point.iter().zip(plane).take(3).map(|(a, b)| a * b).sum::<f64>() + plane.get(3).copied().unwrap_or(0.);
+                        if distance > 0. {
+                            continue;
+                        }
+                    }
                     nearest = t;
                     hit = Some(id);
                 }

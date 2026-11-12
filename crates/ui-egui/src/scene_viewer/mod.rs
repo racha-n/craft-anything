@@ -2,6 +2,8 @@
 pub mod camera;
 pub mod draw_plan;
 mod gpu;
+mod metadata_panel;
+pub mod planning;
 pub mod project_panel;
 use crate::{
     jobs::Jobs,
@@ -26,10 +28,12 @@ pub struct ViewState {
     pub selected_resource: Option<usize>,
     pub search: String,
     pub project: project_panel::State,
+    #[serde(default)]
+    pub planning: planning::State,
 }
 enum Done {
     Evaluated {
-        key: (String, i64, bool, bool),
+        key: (String, i64, bool, bool, bool),
         latest: Arc<craft_anything_engine::tools::scene_project_tools::LatestProjectFrame>,
         project: Arc<craft_anything_engine::tools::scene_project_tools::CachedProject>,
         hidden: BTreeSet<usize>,
@@ -38,6 +42,11 @@ enum Done {
     Chosen(Option<String>),
     Loaded(Arc<LoadedScene>, Box<gpu::Gpu>),
     Rendered(Box<gpu::Gpu>, Result<(), String>),
+    Measured {
+        scene_id: String,
+        instance: usize,
+        result: Result<serde_json::Value, String>,
+    },
     Picked {
         scene_id: String,
         revision: u64,
@@ -60,18 +69,23 @@ pub struct SceneApp {
     revision: u64,
     size: [u32; 2],
     initial_open: bool,
-    frame_key: Option<(String, i64, bool, bool)>,
+    frame_key: Option<(String, i64, bool, bool, bool)>,
     pub project_frame: Option<Arc<craft_anything_engine::tools::scene_project_tools::LatestProjectFrame>>,
     project_model: Option<Arc<craft_anything_engine::tools::scene_project_tools::CachedProject>>,
     timeline_hidden: BTreeSet<usize>,
     timeline_phases: BTreeMap<usize, u8>,
+    timeline_styles: BTreeMap<usize, gpu::InstanceStyle>,
     last_play_tick: std::time::Instant,
     render_error: Option<String>,
     last_draw: Option<(draw_plan::DrawStats, u64)>,
     evaluation_failed: bool,
+    metadata: Option<metadata_panel::MetadataPanel>,
+    measurement: Option<serde_json::Value>,
+    viewport_rect: Option<egui::Rect>,
 }
 impl SceneApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: String) -> Self {
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, ThemeKind::Studio, false);
         Self::with_engine(Arc::new(Engine::new(Session::new(Settings { deep_mode: true, ..Default::default() }))), cc.wgpu_render_state.clone(), path)
@@ -98,13 +112,20 @@ impl SceneApp {
             project_model: None,
             timeline_hidden: BTreeSet::new(),
             timeline_phases: BTreeMap::new(),
+            timeline_styles: BTreeMap::new(),
             last_play_tick: std::time::Instant::now(),
             render_error: None,
             last_draw: None,
             evaluation_failed: false,
+            metadata: None,
+            measurement: None,
+            viewport_rect: None,
         }
     }
     pub fn request_open(&mut self, path: String) {
+        if let Some(panel) = &mut self.metadata {
+            panel.request_open(path.clone());
+        }
         for job in self.jobs.running() {
             job.cancel.cancel();
         }
@@ -116,6 +137,9 @@ impl SceneApp {
     }
     pub fn draw_stats(&self) -> Option<(&draw_plan::DrawStats, u64)> {
         self.last_draw.as_ref().map(|(stats, ms)| (stats, *ms))
+    }
+    pub fn viewport_rect(&self) -> Option<egui::Rect> {
+        self.viewport_rect
     }
     /// The last worker error, for verification clients that must fail promptly.
     pub fn error(&self) -> Option<&str> {
@@ -164,14 +188,26 @@ impl SceneApp {
                 Ok(Done::Evaluated { key, latest, project, hidden, phases }) => {
                     if self.evaluation_key().as_ref() == Some(&key) {
                         self.frame_key = Some(key);
+                        self.timeline_styles = latest
+                            .scene_appearance
+                            .styles
+                            .iter()
+                            .map(|(id, style)| {
+                                (*id, gpu::InstanceStyle { color: style.color, opacity: style.opacity.unwrap_or(1.), clip_plane: style.clip_plane })
+                            })
+                            .collect();
                         self.project_frame = Some(latest);
                         self.project_model = Some(project);
                         self.timeline_hidden = hidden;
+                        if let Some(frame) = &self.project_frame {
+                            self.timeline_hidden.extend(&frame.scene_appearance.hidden);
+                        }
                         self.timeline_phases = phases;
                         self.changed();
                     }
                 }
                 Ok(Done::Loaded(model, gpu)) => {
+                    self.measurement = None;
                     self.last_draw = None;
                     if let (Some(graphics), Some(old)) = (&self.graphics, self.texture.take()) {
                         graphics.renderer.write().free_texture(&old);
@@ -180,13 +216,14 @@ impl SceneApp {
                         self.status = "Scene rendering recovered.".into();
                     }
                     self.state = ViewState::default();
-                    self.state.project.interval_preview = true;
+                    self.state.project.profile_effects = true;
                     self.state.project.object_colors = !model.scene.object_colors.is_empty();
                     self.frame_key = None;
                     self.project_frame = None;
                     self.project_model = None;
                     self.timeline_hidden.clear();
                     self.timeline_phases.clear();
+                    self.timeline_styles.clear();
                     self.state.project.focus = model
                         .metadata
                         .get("tasks")
@@ -227,12 +264,25 @@ impl SceneApp {
                 Ok(Done::Picked { scene_id, revision, selected, complete }) => {
                     if self.model.as_ref().is_some_and(|m| m.scene.id == scene_id) && self.revision == revision {
                         if complete {
+                            self.measurement = None;
                             self.state.selected_instance = selected;
                             self.state.selected_resource = None;
+                            self.state.planning.selected_task = None;
                             self.status = if selected.is_some() { "Surface selected" } else { "No visible surface at that point" }.into();
                             self.changed();
                         } else {
                             self.status = "Selection exceeded its work budget or encountered a singular transform; no certain hit.".into();
+                        }
+                    }
+                }
+                Ok(Done::Measured { scene_id, instance, result }) => {
+                    if self.model.as_ref().is_some_and(|m| m.scene.id == scene_id) && self.state.selected_instance == Some(instance) {
+                        match result {
+                            Ok(value) => self.measurement = Some(value),
+                            Err(error) => {
+                                self.measurement = None;
+                                self.status = error;
+                            }
                         }
                     }
                 }
@@ -242,6 +292,7 @@ impl SceneApp {
                         self.project_frame = None;
                         self.timeline_hidden.clear();
                         self.timeline_phases.clear();
+                        self.timeline_styles.clear();
                         self.state.project.playing = false;
                         self.changed();
                     }
@@ -262,7 +313,7 @@ impl SceneApp {
         let f = &effective;
         let resources = |ids: &BTreeSet<usize>| ids.iter().filter_map(|id| model.scene.resources.get(*id)).map(|r| r.guid.clone()).collect::<Vec<_>>();
         let instances = |ids: &BTreeSet<usize>| ids.iter().filter_map(|id| model.scene.instances.get(*id)).map(|i| i.id.clone()).collect::<Vec<_>>();
-        let params = json!({"scene_id":model.scene.id,"origin":origin,"direction":direction,"hidden_resources":resources(&f.hidden_resources),"isolate_resources":resources(&f.isolate_resources),"hidden_instances":instances(&f.hidden_instances),"isolate_instances":instances(&f.isolate_instances)});
+        let params = json!({"scene_id":model.scene.id,"origin":origin,"direction":direction,"hidden_resources":resources(&f.hidden_resources),"isolate_resources":resources(&f.isolate_resources),"hidden_instances":instances(&f.hidden_instances),"isolate_instances":instances(&f.isolate_instances),"clipping_planes":if self.state.project.mode == project_panel::Mode::Model {Vec::new()} else {self.timeline_styles.iter().filter_map(|(id,style)|style.clip_plane.zip(model.scene.instances.get(*id)).map(|(plane,instance)|json!({"instance_id":instance.id,"plane":plane}))).collect::<Vec<_>>()}});
         let engine = self.engine.clone();
         let revision = self.revision;
         self.jobs.spawn("Select surface", true, move |j| {
@@ -276,8 +327,32 @@ impl SceneApp {
             Ok(Done::Picked { scene_id: model.scene.id.clone(), revision, selected, complete: hit.get("complete").and_then(|v| v.as_bool()).unwrap_or(false) })
         });
     }
-    fn evaluation_key(&self) -> Option<(String, i64, bool, bool)> {
-        Some((self.model.as_ref()?.scene.id.clone(), self.state.project.focus, self.state.project.best_dates, self.state.project.interval_preview))
+    fn measure_selection(&mut self) {
+        let Some((model, instance)) = self.model.clone().zip(self.state.selected_instance) else {
+            return;
+        };
+        let engine = self.engine.clone();
+        self.measurement = None;
+        self.jobs.spawn("Measure selected surface", true, move |job| {
+            let result = engine
+                .call(
+                    "formats_scene_quantities",
+                    json!({"scene_id":model.scene.id,"instance_indices":[instance],"limit":1}),
+                    CallOptions::new(Caller::Ui).with_cancel(job.cancel.clone()),
+                )
+                .map(|value| value.to_json())
+                .map_err(|error| error.for_people());
+            Ok(Done::Measured { scene_id: model.scene.id.clone(), instance, result })
+        });
+    }
+    fn evaluation_key(&self) -> Option<(String, i64, bool, bool, bool)> {
+        Some((
+            self.model.as_ref()?.scene.id.clone(),
+            self.state.project.focus,
+            self.state.project.best_dates,
+            self.state.project.interval_preview,
+            self.state.project.profile_effects,
+        ))
     }
     fn effective_visibility(&self) -> Visibility {
         let mut out = self.state.visibility.clone();
@@ -301,12 +376,13 @@ impl SceneApp {
         self.project_frame = None;
         self.timeline_hidden.clear();
         self.timeline_phases.clear();
+        self.timeline_styles.clear();
         let engine = self.engine.clone();
         self.jobs.spawn("Evaluate project time", true, move |j| {
             engine
                 .call(
                     "formats_project_frame_evaluate",
-                    json!({"focus_wallclock":key.1,"date_mode":if key.2 {"best"}else{"planned"},"interval_preview":key.3}),
+                    json!({"focus_wallclock":key.1,"date_mode":if key.2 {"best"}else{"planned"},"interval_preview":key.3,"profile_effects":key.4}),
                     CallOptions::new(Caller::Ui).with_cancel(j.cancel.clone()),
                 )
                 .map_err(|e| e.message)?;
@@ -321,6 +397,22 @@ impl SceneApp {
             let project = project.ok_or("Project model is unavailable")?;
             if latest.scene_id != model.scene.id {
                 return Err("Project changed during evaluation; reopen the source.".into());
+            }
+            let policy = if key.4 {
+                craft_anything_engine::tools::scene_project_tools::AppearancePolicy::ProfileEffectsPreview
+            } else if key.3 {
+                craft_anything_engine::tools::scene_project_tools::AppearancePolicy::IntervalPreview
+            } else {
+                craft_anything_engine::tools::scene_project_tools::AppearancePolicy::Strict
+            };
+            let dates = if key.2 {
+                craft_anything_engine::tools::scene_project_tools::DateMode::Best
+            } else {
+                craft_anything_engine::tools::scene_project_tools::DateMode::Planned
+            };
+            if project.scene_id != model.scene.id || latest.frame.focus != key.1 || latest.frame.date_mode != dates || latest.frame.appearance_policy != policy
+            {
+                return Err("Project evaluation snapshot changed; retry the selected focus and policy.".into());
             }
             let (hidden, phases) = project_panel::phase_state(&model.scene, &latest.frame);
             Ok(Done::Evaluated { key, latest, project, hidden, phases })
@@ -378,7 +470,11 @@ impl SceneApp {
         egui::ScrollArea::vertical().id_salt("scene_sidebar").show(ui, |ui| self.sidebar_contents(ui, height));
     }
     fn sidebar_contents(&mut self, ui: &mut egui::Ui, panel_height: f32) {
-        ui.heading("Resources");
+        if self.state.planning.enabled {
+            planning::panel_heading(ui, "Resources");
+        } else {
+            ui.heading("Resources");
+        }
         ui.add(egui::TextEdit::singleline(&mut self.state.search).hint_text("Find a resource"));
         let Some(model) = self.model.clone() else {
             ui.label("No scene loaded");
@@ -387,7 +483,7 @@ impl SceneApp {
         ui.small(format!("Showing: {}", model.manifest.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()))
             .on_hover_text(model.manifest.display().to_string());
         ui.label(format!("{} definitions · {} instances", model.scene.meshes.len(), model.scene.instances.len()));
-        ui.small(format!("{} explicit object colours", model.scene.object_colors.len()));
+        ui.small(format!("{} object/group colours", model.scene.object_colors.len()));
         ui.separator();
         let query = self.state.search.to_lowercase();
         let rows = self
@@ -396,7 +492,8 @@ impl SceneApp {
             .copied()
             .filter(|(id, _)| model.scene.resources.get(*id).is_some_and(|r| query.is_empty() || r.name.to_lowercase().contains(&query)))
             .collect::<Vec<_>>();
-        egui::ScrollArea::vertical().id_salt("resource_tree").max_height((panel_height - 320.).clamp(48., 300.)).show_rows(ui, 22., rows.len(), |ui, range| {
+        let tree_height = if self.state.planning.enabled { (panel_height - 295.).max(80.) } else { (panel_height - 320.).clamp(48., 300.) };
+        egui::ScrollArea::vertical().id_salt("resource_tree").max_height(tree_height).show_rows(ui, 22., rows.len(), |ui, range| {
             for row in range {
                 if let Some((id, depth)) = rows.get(row).copied()
                     && let Some(r) = model.scene.resources.get(id)
@@ -410,9 +507,14 @@ impl SceneApp {
                             r.name.chars().take(120).collect::<String>(),
                             model.scene.resource_instance_counts.get(id).copied().unwrap_or(0)
                         );
-                        if ui.selectable_label(self.state.selected_resource == Some(id), label).on_hover_text(&r.name).clicked() {
+                        if ui
+                            .add(egui::Button::selectable(self.state.selected_resource == Some(id), label).wrap_mode(egui::TextWrapMode::Truncate))
+                            .on_hover_text(&r.name)
+                            .clicked()
+                        {
                             self.state.selected_resource = Some(id);
                             self.state.selected_instance = None;
+                            self.state.planning.selected_task = None;
                             self.changed();
                         }
                     });
@@ -468,6 +570,19 @@ impl SceneApp {
             self.state.visibility = Visibility::default();
             self.changed();
         }
+        if ui.add_enabled(self.state.selected_instance.is_some() && !self.jobs.busy(), egui::Button::new("Measure selected surface")).clicked() {
+            self.measure_selection();
+        }
+        if let Some(value) = &self.measurement {
+            ui.collapsing("Stored-world surface measurements",|ui| {
+                if let Some(row)=value.get("result").and_then(|v|v.get("page")).and_then(|v|v.get("items")).and_then(|v|v.as_array()).and_then(|v|v.first()) {
+                    if let Some(area)=row.get("surface_area_stored_world_units_squared").and_then(|v|v.as_f64()) {ui.label(format!("Surface area: {area:.6} (world units squared)"));}
+                    if let Some(volume)=row.get("signed_tetrahedral_volume_stored_world_units_cubed").and_then(|v|v.as_f64()) {ui.label(format!("Signed algebraic volume: {volume:.6} (world units cubed)"));}
+                    else {ui.label("Volume unresolved: closure/orientation conditions are not met.");}
+                    ui.small("Full source surface, including parts hidden by the preview cut. Units, solid self-intersections and native quantity parity are not verified.");
+                }
+            });
+        }
         ui.separator();
         ui.small("Experimental shading. Source material precedence and full visual parity remain unverified.");
         if let Some((stats, ms)) = self.draw_stats() {
@@ -479,55 +594,88 @@ impl SceneApp {
         ui.small("4D/5D interpretation limits remain explicit in the project panels.");
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if self.state.planning.enabled {
+            ui.scope(|ui| {
+                planning::style(ui);
+                ui.painter().rect_filled(ui.max_rect(), 0., theme::PlanningTokens::default().surface.chrome);
+                self.show_contents(ui);
+            });
+        } else {
+            self.show_contents(ui);
+        }
+    }
+    fn show_contents(&mut self, ui: &mut egui::Ui) {
+        if self.metadata.is_some() {
+            let back = ui.button("Back to 3D viewer").clicked();
+            if let Some(panel) = &mut self.metadata {
+                panel.show(ui);
+            }
+            if back {
+                self.metadata = None;
+            }
+            return;
+        }
         self.jobs.set_repaint(ui.ctx());
         self.poll();
         if self.initial_open && !self.jobs.busy() {
             self.initial_open = false;
             self.open();
         }
-        ui.horizontal(|ui| {
-            ui.heading("Scene viewer");
-            ui.label("Experimental");
-            if ui.button("Fit all").clicked()
-                && let Some(model) = &self.model
-            {
-                self.state.camera.fit(model.scene.bounds);
-                self.changed();
-            }
-            if ui.checkbox(&mut self.state.camera.y_up, "Y up (manual)").changed() {
-                self.changed();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.path)
-                    .desired_width((ui.available_width() - 165.).max(80.))
-                    .hint_text("Absolute path to .sp or scene.json"),
-            );
-            if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Browse")).clicked() {
-                self.jobs.spawn("Choose project", true, |_| {
-                    Ok(Done::Chosen(
-                        rfd::FileDialog::new().add_filter("Project or scene", &["sp", "json"]).pick_file().map(|p| p.to_string_lossy().into_owned()),
-                    ))
-                });
-            }
-            if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Open")).clicked() {
-                self.open();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.set_min_height(26.);
-            ui.label(&self.status);
-            let busy = self.jobs.busy();
-            ui.add_visible(busy, egui::Spinner::new().size(16.));
-            if ui.add_enabled(busy, egui::Button::new("Cancel")).clicked() {
-                for j in self.jobs.running() {
-                    j.cancel.cancel();
+        if self.state.planning.enabled {
+            self.planning_header(ui);
+        } else {
+            ui.horizontal(|ui| {
+                ui.heading("Scene viewer");
+                ui.label("Experimental");
+                if ui.button("Planning layout").clicked() {
+                    self.state.planning.enabled = true;
+                    self.changed();
                 }
+                if self.path.to_ascii_lowercase().ends_with(".sp") && ui.add_enabled(!self.jobs.busy(), egui::Button::new("Open schedule/costs only")).clicked()
+                {
+                    self.metadata = Some(metadata_panel::MetadataPanel::new(self.engine.clone(), self.path.clone()));
+                }
+                if ui.button("Fit all").clicked()
+                    && let Some(model) = &self.model
+                {
+                    self.state.camera.fit(model.scene.bounds);
+                    self.changed();
+                }
+                if ui.checkbox(&mut self.state.camera.y_up, "Y up (manual)").changed() {
+                    self.changed();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.path)
+                        .desired_width((ui.available_width() - 165.).max(80.))
+                        .hint_text("Absolute path to .sp or scene.json"),
+                );
+                if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Browse")).clicked() {
+                    self.jobs.spawn("Choose project", true, |_| {
+                        Ok(Done::Chosen(
+                            rfd::FileDialog::new().add_filter("Project or scene", &["sp", "json"]).pick_file().map(|p| p.to_string_lossy().into_owned()),
+                        ))
+                    });
+                }
+                if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Open")).clicked() {
+                    self.open();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.set_min_height(26.);
+                ui.label(&self.status);
+                let busy = self.jobs.busy();
+                ui.add_visible(busy, egui::Spinner::new().size(16.));
+                if ui.add_enabled(busy, egui::Button::new("Cancel")).clicked() {
+                    for j in self.jobs.running() {
+                        j.cancel.cancel();
+                    }
+                }
+            });
+            if project_panel::controls(ui, &mut self.state.project, self.project_frame.as_ref().map(|f| f.frame.as_ref())) {
+                self.changed();
             }
-        });
-        if project_panel::controls(ui, &mut self.state.project, self.project_frame.as_ref().map(|f| f.frame.as_ref())) {
-            self.changed();
         }
         if self.evaluation_failed && ui.button("Retry timeline evaluation").clicked() {
             self.frame_key = None;
@@ -549,17 +697,68 @@ impl SceneApp {
             }
         }
         ui.separator();
-        let tokens = Tokens::get(ui.ctx());
-        egui::Panel::left("scene_resources").resizable(true).default_size(300.).show(ui, |ui| self.sidebar(ui));
-        egui::CentralPanel::default().show(ui, |ui| {
-            if let Some((frame, model)) = self.project_frame.as_ref().zip(self.project_model.as_ref())
+        let planning = self.state.planning.enabled;
+        let tokens = if planning { theme::PlanningTokens::default().surface } else { Tokens::get(ui.ctx()) };
+        if planning {
+            egui::Panel::bottom("planning_status")
+                .resizable(false)
+                .exact_size(23.)
+                .frame(egui::Frame::new().fill(tokens.chrome).inner_margin(egui::Margin::symmetric(7, 3)))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Read only");
+                        ui.separator();
+                        ui.add(egui::Label::new(&self.status).truncate());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.small("Experimental · unsupported values remain unresolved");
+                        });
+                    });
+                });
+        }
+        egui::Panel::left("scene_resources")
+            .resizable(true)
+            .default_size(if planning { 245. } else { 300. })
+            .size_range(170. ..=450.)
+            .frame(if planning { planning::frame(&tokens) } else { egui::Frame::side_top_panel(ui.style()) })
+            .show(ui, |ui| self.sidebar(ui));
+        if planning && self.state.planning.show_properties && ui.available_width() > 560. {
+            egui::Panel::right("planning_properties_panel")
+                .resizable(true)
+                .default_size(245.)
+                .size_range(190. ..=420.)
+                .frame(planning::frame(&tokens))
+                .show(ui, |ui| self.planning_inspector(ui));
+        }
+        if planning && self.state.planning.show_schedule {
+            let height = if ui.ctx().content_rect().height() < 720. { 150. } else { 220. };
+            egui::Panel::top("planning_schedule_panel")
+                .resizable(true)
+                .default_size(height)
+                .size_range(105. ..=380.)
+                .frame(planning::frame(&tokens))
+                .show(ui, |ui| self.planning_schedule(ui));
+        }
+        egui::CentralPanel::default().frame(if planning { planning::frame(&tokens) } else { egui::Frame::central_panel(ui.style()) }).show(ui, |ui| {
+            if (!planning || self.state.project.mode == project_panel::Mode::Cost)
+                && let Some((frame, model)) = self.project_frame.as_ref().zip(self.project_model.as_ref())
                 && let Some(task) = project_panel::details(ui, &mut self.state.project, &frame.frame, &model.model)
             {
                 self.select_task(&task);
             }
+            if planning {
+                planning::panel_heading(
+                    ui,
+                    match self.state.project.mode {
+                        project_panel::Mode::Model => "3D View — Project model",
+                        project_panel::Mode::Schedule => "3D View — Using task dates",
+                        project_panel::Mode::Cost => "3D View — Project controls",
+                    },
+                );
+            }
             ui.small("Drag: orbit · Shift/right drag: pan · Wheel: zoom · Click: select surface");
             let size = ui.available_size().max(egui::vec2(1., 1.));
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+            self.viewport_rect = Some(rect);
             ui.painter().rect_filled(rect, 0., tokens.canvas);
             if let Some(texture) = self.texture {
                 ui.painter().image(texture, rect, egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)), egui::Color32::WHITE);
@@ -593,7 +792,12 @@ impl SceneApp {
                 self.pick([f64::from((p.x - rect.left()) / rect.width() * 2. - 1.), f64::from(1. - (p.y - rect.top()) / rect.height() * 2.)], aspect);
             }
         });
-        if self.state.project.mode != project_panel::Mode::Model && !self.jobs.busy() && self.frame_key != self.evaluation_key() {
+        let source_tasks = self.model.as_ref().is_some_and(|m| m.metadata.get("tasks").is_some());
+        if (self.state.project.mode != project_panel::Mode::Model || (planning && self.state.planning.show_schedule && source_tasks))
+            && !self.jobs.busy()
+            && !self.evaluation_failed
+            && self.frame_key != self.evaluation_key()
+        {
             self.evaluate();
         }
         if self.dirty
@@ -603,8 +807,11 @@ impl SceneApp {
             let camera = self.state.camera.clone();
             let visibility = self.effective_visibility();
             let phases = if self.state.project.mode == project_panel::Mode::Model { BTreeMap::new() } else { self.timeline_phases.clone() };
+            let instance_styles = if self.state.project.mode == project_panel::Mode::Model { BTreeMap::new() } else { self.timeline_styles.clone() };
             let source_colors = self.state.project.source_colors;
             let object_colors = self.state.project.object_colors;
+            let texture_preview = self.state.project.texture_preview;
+            let flip_texture_v = self.state.project.flip_texture_v;
             let selected = self.state.selected_instance;
             let selected_resource = self.state.selected_resource;
             let size = self.size;
@@ -612,7 +819,20 @@ impl SceneApp {
             self.jobs.spawn("Render scene", true, move |j| {
                 let result = gpu.render(
                     &model.scene,
-                    &gpu::FrameData { camera, visibility, selected, selected_resource, size, tokens, phases, source_colors, object_colors },
+                    &gpu::FrameData {
+                        texture_preview,
+                        flip_texture_v,
+                        camera,
+                        visibility,
+                        selected,
+                        selected_resource,
+                        size,
+                        tokens,
+                        phases,
+                        source_colors,
+                        object_colors,
+                        instance_styles,
+                    },
                     &j.cancel,
                 );
                 Ok(Done::Rendered(gpu, result))

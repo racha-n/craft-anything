@@ -92,13 +92,16 @@
         "source_diffuse_status": {"type": "string"},
         "source_opacity": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
         "source_object_color": {
-          "description": "Optional explicit binary entity RGB override; no inheritance is inferred.",
+          "description": "Optional binary entity RGB override; the first active RGB on the rooted Entities chain wins in the admitted preview. IncludeLibrary RGB is excluded.",
           "type": ["array", "null"],
           "items": {"type": "number", "minimum": 0, "maximum": 1},
           "minItems": 3,
           "maxItems": 3
         },
         "source_object_color_origin": {"type": ["object", "null"]},
+        "source_transparency_storage_candidate": {"type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Raw paired native storage; percent and alpha conversion remain unverified."},
+        "source_transparency_storage_origin": {"type": ["object", "null"]},
+        "attribute_references": {"type": "array", "items": {"$ref": "#/$defs/guid"}, "maxItems": 200000},
         "children": {
           "type": "array",
           "items": {
@@ -200,6 +203,12 @@
         },
         "local_bounds": {
           "$ref": "#/$defs/bounds"
+        },
+        "texture_coordinates": {
+          "type": ["array", "null"],
+          "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+          "maxItems": 10000000,
+          "description": "Optional finite planar UV candidates, exactly one pair per vertex when present; native sampling is unverified."
         }
       },
       "additionalProperties": false

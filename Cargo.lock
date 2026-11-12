@@ -1394,6 +1394,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "image",
  "log",
  "muda",
  "pollster 0.4.0",

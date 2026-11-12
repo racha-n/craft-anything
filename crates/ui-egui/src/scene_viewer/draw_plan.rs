@@ -266,6 +266,9 @@ mod tests {
             resources: Vec::new(),
         };
         Scene {
+            mesh_uvs: Default::default(),
+            mesh_textures: Default::default(),
+            texture_assets: None,
             id: "synthetic".into(),
             source_sha256: String::new(),
             unit_declaration: String::new(),

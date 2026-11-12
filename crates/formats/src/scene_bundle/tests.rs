@@ -36,6 +36,20 @@ fn frontmost_surface_visibility_and_membership() {
     assert_eq!(s.resource_bounds(0), Some(s.bounds));
 }
 #[test]
+fn clipped_surface_cannot_mask_a_visible_surface_behind_it() {
+    let s = read(&fixture()).unwrap();
+    let filters = Visibility::default();
+    let mut planes = BTreeMap::from([(1, [1., 0., 0., -0.1])]);
+    let ray = ([0.25, 0., 5.], [0., 0., -1.]);
+    assert_eq!(s.pick_clipped(ray.0, ray.1, &filters, &planes, || true).unwrap().instance, Some(0));
+    planes.insert(1, [1., 0., 0., -0.5]);
+    assert_eq!(s.pick_clipped(ray.0, ray.1, &filters, &planes, || true).unwrap().instance, Some(1));
+    planes.insert(1, [0.; 4]);
+    assert!(s.pick_clipped(ray.0, ray.1, &filters, &planes, || true).is_err());
+    planes.insert(1, [f64::NAN, 0., 0., 0.]);
+    assert!(s.pick_clipped(ray.0, ray.1, &filters, &planes, || true).is_err());
+}
+#[test]
 fn cancellation_and_invalid_ray_never_claim_a_hit() {
     let files = fixture();
     let s = read(&files).unwrap();
@@ -204,7 +218,7 @@ fn invalid_source_diffuse_is_rejected() {
 }
 
 #[test]
-fn object_colors_use_direct_leaf_values_without_ancestor_fallback() {
+fn entity_parent_override_takes_precedence_over_explicit_leaf_rgb() {
     let mut files = fixture();
     modify(&mut files, 1, 0, |v| {
         v["children"] = json!([B]);
@@ -223,10 +237,10 @@ fn object_colors_use_direct_leaf_values_without_ancestor_fallback() {
     });
     let scene = read(&files).unwrap();
     assert_eq!(scene.object_colors.get(&0), Some(&[0.25f32, 0.5, 0.75]));
-    assert!(!scene.object_colors.contains_key(&1));
+    assert_eq!(scene.object_colors.get(&1), Some(&[0.25f32, 0.5, 0.75]));
     modify(&mut files, 1, 1, |v| v["source_object_color"] = json!([0.75, 0.5, 0.25]));
     let scene = read(&files).unwrap();
-    assert_eq!(scene.object_colors.get(&1), Some(&[0.75f32, 0.5, 0.25]));
+    assert_eq!(scene.object_colors.get(&1), Some(&[0.25f32, 0.5, 0.75]));
     assert!(read(&fixture()).unwrap().object_colors.is_empty());
 }
 #[test]
@@ -261,6 +275,37 @@ fn object_color_belongs_to_entity_not_terminal_library_definition() {
     });
     let scene = read(&files).unwrap();
     assert_eq!(scene.object_colors.get(&1), Some(&[0.25f32, 0.5, 0.75]));
+    modify(&mut files, 1, 1, |v| v["source_object_color"] = Value::Null);
+    assert!(!read(&files).unwrap().object_colors.contains_key(&1));
+}
+
+#[test]
+fn outer_group_override_precedes_inner_group_and_leaf_with_explicit_fallback() {
+    const C: &str = "10000000-0000-0000-0000-000000000003";
+    const D: &str = "10000000-0000-0000-0000-000000000004";
+    let mut files = fixture();
+    modify(&mut files, 0, 0, |v| v["entities"] = json!(4));
+    modify(&mut files, 1, 1, |v| {
+        v["parent_guid"] = json!(D);
+        v["source_object_color"] = json!([0.7, 0.8, 0.9]);
+    });
+    files[1].extend(line(json!({"guid":C,"name":"Original outer group","section":"Entities","parent_guid":null,"children":[D],"mesh":null,"reference":null,"matrix":math::IDENTITY,"source_object_color":[0.1,0.2,0.3]})));
+    files[1].extend(line(json!({"guid":D,"name":"Original inner group","section":"Entities","parent_guid":C,"children":[B],"mesh":null,"reference":null,"matrix":math::IDENTITY,"source_object_color":[0.4,0.5,0.6]})));
+    let mut hash = Sha256::new();
+    hash.update("a".repeat(64).as_bytes());
+    for id in [C, D, B] {
+        hash.update(b"/");
+        hash.update(id.as_bytes());
+    }
+    modify(&mut files, 3, 1, |v| {
+        v["path"] = json!([C, D, B]);
+        v["instance_id"] = json!(format!("{:x}", hash.finalize()));
+    });
+    assert_eq!(read(&files).unwrap().object_colors.get(&1), Some(&[0.1f32, 0.2, 0.3]));
+    modify(&mut files, 1, 2, |v| v["source_object_color"] = Value::Null);
+    assert_eq!(read(&files).unwrap().object_colors.get(&1), Some(&[0.4f32, 0.5, 0.6]));
+    modify(&mut files, 1, 3, |v| v["source_object_color"] = Value::Null);
+    assert_eq!(read(&files).unwrap().object_colors.get(&1), Some(&[0.7f32, 0.8, 0.9]));
     modify(&mut files, 1, 1, |v| v["source_object_color"] = Value::Null);
     assert!(!read(&files).unwrap().object_colors.contains_key(&1));
 }

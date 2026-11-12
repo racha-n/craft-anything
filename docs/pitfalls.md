@@ -1,5 +1,12 @@
 # Pitfalls
 
+**An empty incremental path wrote compiler cache into the repository root.** Passing
+`-C incremental=` on Windows created a crate cache in the current directory rather
+than disabling it, so the secret scan correctly refused the object files' embedded
+local paths. Use a named cache path or `CARGO_INCREMENTAL=0`; preserve any recovered
+cache under an ignored directory, verify its resolved path before moving it, and rerun
+the secret scan. Do not rebuild an executable while a check is still running it.
+
 Mistakes made while building this project, what they cost, and the rule that prevents each one.
 Read this before your first change; add to it when you make a new mistake worth not repeating.
 Keep entries short: what happened, then the rule.
@@ -1077,3 +1084,10 @@ carry dummy raw start/duration values. Derive summary bounds from every child,
 propagate incomplete children, and keep zero-duration leaves as instants. Raw
 assignment rates are not monetary prices, and unset actual/remaining storage must
 remain unresolved instead of becoming zero.
+
+
+**Stored leaf RGB is not necessarily the displayed object colour.** Isolated saved
+controls showed an outer group overriding an inner group and a leaf while both
+retained their original RGB bytes. Check hierarchy precedence independently, and
+include an unrelated object readback to exclude a colour dialog retaining its last
+custom value. Do not replace that evidence with a nearest-node or leaf-wins guess.

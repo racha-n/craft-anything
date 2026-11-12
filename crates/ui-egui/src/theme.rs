@@ -92,6 +92,42 @@ pub const WORKED_OUT: Color32 = Color32::from_rgb(0x5b, 0x8d, 0xef);
 pub const BEST_GUESS: Color32 = Color32::from_rgb(0xe0, 0xa2, 0x3a);
 pub const UNKNOWN: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x93);
 
+/// Dense desktop planning workspace. Kept separate from the general app's Studio themes.
+#[derive(Clone, Copy)]
+pub struct PlanningTokens {
+    pub surface: Tokens,
+    pub ribbon: Color32,
+    pub selected_row: Color32,
+    pub alternate_row: Color32,
+    pub task_bar: Color32,
+    pub summary_bar: Color32,
+    pub focus_line: Color32,
+}
+impl Default for PlanningTokens {
+    fn default() -> Self {
+        let mut surface = Tokens::for_kind(ThemeKind::StudioLight);
+        surface.chrome = Color32::from_rgb(0xee, 0xee, 0xee);
+        surface.card = Color32::WHITE;
+        surface.canvas = Color32::from_rgb(0xc1, 0xd6, 0xe9);
+        surface.separator = Color32::from_rgb(0xcf, 0xd2, 0xd7);
+        surface.card_border = surface.separator;
+        surface.raised = Color32::from_rgb(0xe3, 0xe6, 0xea);
+        surface.field = Color32::WHITE;
+        surface.radius = 0.;
+        surface.radius_sm = 0.;
+        surface.radius_lg = 0.;
+        Self {
+            surface,
+            ribbon: Color32::from_rgb(0x2e, 0x5a, 0x96),
+            selected_row: Color32::from_rgb(0xff, 0xf1, 0x99),
+            alternate_row: Color32::from_rgb(0xf6, 0xf8, 0xfa),
+            task_bar: Color32::from_rgb(0x4a, 0x93, 0x4e),
+            summary_bar: Color32::from_rgb(0x35, 0x65, 0xa1),
+            focus_line: Color32::from_rgb(0xce, 0x47, 0x3d),
+        }
+    }
+}
+
 /// The colour for a confidence level (`None` = unknown).
 pub fn confidence_color(c: Option<Confidence>) -> Color32 {
     match c {
