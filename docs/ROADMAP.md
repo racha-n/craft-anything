@@ -2490,7 +2490,8 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [x] Build a bounded, source-bound native SP scalar writer with untouched-section preservation and a separate native reopen acceptance gate. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
       Coordinated quantity/rate and duration/rate controls matched independent native UI Tasks byte-for-byte and survived native Save/reopen on the observed Planned singleton. Keep the storage-only tool contract and general Save controls separate; see docs/4d5d-completion.md for the supported matrix.
 - [ ] Implement native project creation/saving and schedule import/export before enabling the grey File commands.
-- [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands.
+- [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+      Establish independent native task/relationship/lag controls before structural SP transactions and scheduling admission.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
