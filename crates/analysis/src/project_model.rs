@@ -310,7 +310,7 @@ fn direct_planned_value(task: &TaskView, amount: i64, focus: i64) -> Result<i64,
     let numerator = i128::from(amount).checked_mul(i128::from(elapsed)).ok_or("Direct Planned Value amount overflows")?;
     rounded(numerator, i128::from(duration))
 }
-fn decode_hex(value: &str, limit: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_hex(value: &str, limit: usize) -> Result<Vec<u8>, String> {
     if !value.len().is_multiple_of(2) || value.len() / 2 > limit {
         return Err("Raw storage hex exceeds its size bound or has odd length".into());
     }

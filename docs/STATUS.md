@@ -60,6 +60,22 @@ all-target clippy, layers, locks, secrets, tools, wasm, doctests and formatting.
 generated text receipts validated against their version-1 schema. This remains an
 experimental candidate workflow; structural editing and general native Save remain pending. See [the contract and scope](4d5d-completion.md#task-text-storage-candidates).
 
+### Declared FS earliest-date preview (R3.14)
+
+A read-only engine/CLI/MCP tool previews earliest dates using an explicit naive-clock
+anchor and a declared unconstrained fixed-work model. Its limits are 512 Planned leaf
+tasks, 1,024 FS links and nonnegative minute-aligned working-time lag. Predecessor
+calendars allocate lag; task calendars allocate duration. Cycles, unsupported inputs,
+calendar failures, cancellation and shared budgets reject the calculation without
+returning partial dates or changing the source.
+
+Six focused regressions and all 11 frozen checks passed: main/CLI/check-tool builds,
+949 analysis/engine target tests (9 ignored), all-target clippy, layers, locks, secrets,
+tools, wasm, doctests and formatting. Latest CLI start/finish/duration results matched
+the two explicit-anchor native FS/lag 0 and FS/lag 2d controls; both inputs stayed
+unchanged. Generic native parity and critical-path flags remain false. General Plan
+rescheduling, native write-back and baselines remain unadmitted.
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

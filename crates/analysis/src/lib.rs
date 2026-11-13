@@ -17,6 +17,7 @@ pub mod web_scripts;
 
 pub mod project_curves;
 pub mod project_model;
+pub mod project_schedule;
 pub mod project_simulation;
 
 pub mod project_scene;

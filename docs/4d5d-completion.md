@@ -294,3 +294,32 @@ survived native Reschedule/save/reopen: FS/lag 0 placed the predecessor at Novem
 changed only the successor's stored planned start. This validates the explicit-anchor
 fixture subset, not the cause of the localized default mismatch or other scheduling
 policies, task kinds, constraints, hierarchies or critical paths.
+
+## Declared FS earliest-date preview
+
+`formats_project_schedule_preview` is read-only. It requires source SHA-256, an explicit
+nonnegative minute-aligned naive wall-clock anchor, and a declaration that the tasks are
+unconstrained fixed work. It does not infer an anchor from localized source-application
+text. Source task kinds and constraints remain uncertified; this declaration is a model
+assumption, not a native-admission flag.
+
+The preview accepts up to 512 Planned leaf tasks, 1,024 FS links, 64 calendars and 4,096
+calendar day types/exceptions. Durations are positive and lags nonnegative; both are
+minute-aligned and capped at one million working seconds. Lag uses the predecessor's
+effective calendar and task duration uses the task's calendar. Shared work-scan budgets,
+cancellation, source identity, missing references and cycle checks bound computation.
+Unsupported kinds, negative lag, hierarchies, progressed tasks or a failed calculation
+return an error instead of a partial schedule. Results are paged, preserve input order,
+and retain `native_parity_verified: false` and `critical_path_calculated: false`.
+
+Six focused regressions cover working boundaries, positive lag, multiple predecessors,
+calendar exceptions, upstream versus downstream calendars, input refusal and shared
+budget exhaustion. Latest CLI results matched every native task start, finish and duration
+in the two explicit-anchor FS/lag 0 and FS/lag 2d fixtures without changing either input.
+These metadata-only controls do not establish general native rescheduling, critical paths,
+baseline management, utilization coordination or a native write-back contract.
+
+Frozen validation passed all 11 checks: six focused regressions, main/CLI/check-tool
+builds, 949 analysis/engine target tests (9 ignored), all-target clippy, layers, locks,
+secrets, tools, wasm, doctests and formatting. This adds a declared read-only model;
+the general Plan rescheduling command and native authoring acceptance remain separate.
