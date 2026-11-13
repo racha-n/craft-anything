@@ -33,6 +33,20 @@ Use versioned metadata and a real synthetic calendar for expected schedule-deriv
 Also test that an absent calendar leaves planned value unresolved while a dated expense ledger
 remains separately usable. Do not weaken admission to make an incomplete fixture pass.
 
+**Expanded forms pushed a close control outside the visible window.** The mixed widget test
+exported successfully but could not click the footer Close button. Keep discard/close beside
+the revision controls, and scroll export controls into view in realistic widget tests.
+
+**A Unicode round trip did not prove visible glyphs.** A local build without the CI-pinned
+font input stored the right Unicode while Thai/CJK rendered as boxes. Build visual QA with
+the required pinned fonts and install the application's actual font setup in the harness.
+Do not replace source characters to hide missing-font coverage.
+
+**Localized scheduler text did not identify the stored year.** A native Reschedule dialog
+showed 8/11/2569, and its output stored Gregorian year 2569. Preserve the observation and
+use separate explicit-date controls; do not silently apply a 543-year correction or claim
+scheduling parity from localized labels alone. The cause remains unresolved.
+
 ## Git and pull requests
 
 **Work began before its roadmap claim, on a branch without the required prefix.** Renaming the

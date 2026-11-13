@@ -8,6 +8,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
+use craft_anything_formats::sp_project::mixed;
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
 use schemars::JsonSchema;
@@ -33,6 +34,18 @@ struct TextRequest {
     acknowledge_storage_only: bool,
     edits: Vec<TextEdit>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MixedRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    #[serde(default)]
+    edits: Vec<ScalarEdit>,
+    #[serde(default)]
+    text_edits: Vec<TextEdit>,
+}
 pub fn specs() -> Vec<ToolSpec> {
     vec![
         spec(
@@ -56,6 +69,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<TextRequest>,
             run_text,
+        ),
+        spec(
+            "formats_project_sp_mixed_candidate_write",
+            "Write an experimental mixed SP candidate",
+            "Compose up to 256 guarded scalar and task text fields in a new project copy. Publish a version-2 receipt retaining the original scalar and text stage receipts. Native compatibility and schedule consistency remain separate validation gates.",
+            "Export a separate test copy containing both numeric edits and changed task labels. Validate it independently before relying on it.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<MixedRequest>,
+            run_mixed,
         ),
     ]
 }
@@ -153,6 +177,40 @@ fn run_text(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     Ok(ToolOutput::evidence(evidence))
 }
 
+pub(super) fn run_mixed(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: MixedRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = mixed::candidate(&input.bytes, &p.expected_source_sha256, &p.edits, &p.text_edits, |progress| {
+        ctx.report(Some(progress), "Preparing experimental mixed SP candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted mixed candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_mixed_candidate_write", input.subject, params)
+        .summary("Prepared an experimental mixed SP storage candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new(
+            "native_persistence_unverified",
+            "Internal reparse passed; native compatibility and schedule consistency remain unverified.",
+        ))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,16 +230,19 @@ mod tests {
         assert!(!output.with_extension("sp.receipt.json").exists());
     }
     #[test]
-    fn task_text_tool_requires_acknowledgement_and_rejects_missing_source() {
+    fn task_text_and_mixed_tools_require_acknowledgement_and_valid_source() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("text.sp");
         let engine = Engine::new(crate::testing::session());
         let mut request = json!({"path":dir.path().join("absent.sp"), "expected_source_sha256":"0".repeat(64),
             "output_path":output,"acknowledge_storage_only":false,"edits":[]});
-        let call = |params| engine.call("formats_project_sp_task_text_candidate_write", params, CallOptions::new(Caller::Cli));
-        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
-        request["acknowledge_storage_only"] = json!(true);
-        assert!(call(request).is_err());
+        for tool in ["formats_project_sp_task_text_candidate_write", "formats_project_sp_mixed_candidate_write"] {
+            let call = |params| engine.call(tool, params, CallOptions::new(Caller::Cli));
+            request["acknowledge_storage_only"] = json!(false);
+            assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+            request["acknowledge_storage_only"] = json!(true);
+            assert!(call(request.clone()).is_err());
+        }
         assert!(!output.exists());
         assert!(!output.with_extension("sp.receipt.json").exists());
     }

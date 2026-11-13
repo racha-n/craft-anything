@@ -1,15 +1,23 @@
-//! Bounded scalar draft history. Native save and scheduling acceptance remain separate.
+//! Bounded source-bound scalar/text draft history. Native acceptance remains separate.
 use super::{
-    FormatError, parse_metadata,
-    writer::{self, Candidate, ScalarEdit},
+    FormatError, mixed, parse_metadata,
+    task_strings::TextEdit,
+    writer::{self, ScalarEdit},
 };
 use std::sync::Arc;
 
+const HISTORY_PAYLOAD_LIMIT: usize = 16 * 1024 * 1024;
+#[derive(Default)]
+struct Version {
+    scalars: Vec<ScalarEdit>,
+    texts: Vec<TextEdit>,
+    payload_bytes: usize,
+}
 #[derive(Clone)]
 pub struct Draft {
     original: Arc<[u8]>,
     pub source_sha256: String,
-    versions: Vec<Vec<ScalarEdit>>,
+    versions: Vec<Arc<Version>>,
     cursor: usize,
     pub revision: u64,
 }
@@ -20,16 +28,22 @@ impl Draft {
         if !parsed.source_sha256.eq_ignore_ascii_case(expected) {
             return Err("Source changed; reload the project before editing".into());
         }
-        Ok(Self { original: raw, source_sha256: parsed.source_sha256, versions: vec![vec![]], cursor: 0, revision: 0 })
+        Ok(Self { original: raw, source_sha256: parsed.source_sha256, versions: vec![Arc::new(Version::default())], cursor: 0, revision: 0 })
     }
     pub fn edits(&self) -> &[ScalarEdit] {
-        self.versions.get(self.cursor).map(Vec::as_slice).unwrap_or_default()
+        self.versions.get(self.cursor).map(|v| v.scalars.as_slice()).unwrap_or_default()
+    }
+    pub fn text_edits(&self) -> &[TextEdit] {
+        self.versions.get(self.cursor).map(|v| v.texts.as_slice()).unwrap_or_default()
+    }
+    pub fn edit_count(&self) -> usize {
+        self.edits().len().saturating_add(self.text_edits().len())
     }
     pub fn can_undo(&self) -> bool {
         self.cursor > 0
     }
     pub fn is_dirty(&self) -> bool {
-        !self.edits().is_empty()
+        !self.edits().is_empty() || !self.text_edits().is_empty()
     }
     pub fn can_redo(&self) -> bool {
         self.cursor.checked_add(1).is_some_and(|n| n < self.versions.len())
@@ -40,18 +54,24 @@ impl Draft {
         }
         self.revision.checked_add(1).ok_or_else(|| "Draft revision exhausted".into())
     }
-    pub fn candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<Candidate, String> {
-        writer::candidate(&self.original, &self.source_sha256, self.edits(), keep).map_err(error)
+    pub fn candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<mixed::Candidate, String> {
+        mixed::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), keep).map_err(error)
     }
     pub fn bytes(&self, keep: impl FnMut(f32) -> bool) -> Result<Vec<u8>, String> {
-        if self.edits().is_empty() {
+        if !self.is_dirty() {
             return Ok(self.original.to_vec());
+        }
+        if self.text_edits().is_empty() {
+            return writer::candidate(&self.original, &self.source_sha256, self.edits(), keep).map(|v| v.bytes).map_err(error);
         }
         self.candidate(keep).map(|v| v.bytes)
     }
-    pub fn apply(&mut self, revision: u64, edits: &[ScalarEdit], mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+    pub fn apply(&mut self, revision: u64, edits: &[ScalarEdit], keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+        self.apply_mixed(revision, edits, &[], keep)
+    }
+    pub fn apply_mixed(&mut self, revision: u64, edits: &[ScalarEdit], texts: &[TextEdit], mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
         let next = self.check_revision(revision)?;
-        if edits.is_empty() {
+        if edits.is_empty() && texts.is_empty() {
             return Err("Choose at least one draft edit".into());
         }
         if self.cursor >= 64 {
@@ -59,24 +79,42 @@ impl Draft {
         }
         let current = self.bytes(&mut keep)?;
         let parsed = parse_metadata(&current, &mut keep).map_err(error)?;
-        // Validate every expected current value and transaction overlap before touching history.
-        writer::candidate(&current, &parsed.source_sha256, edits, &mut keep).map_err(error)?;
-        let mut merged = self.edits().to_vec();
+        // Validate current expectations atomically, including all cross-kind field limits.
+        validate(&current, &parsed.source_sha256, edits, texts, &mut keep)?;
+        let mut scalars = self.edits().to_vec();
         for edit in edits {
             let key = identity(edit);
-            if let Some(old) = merged.iter_mut().find(|old| identity(old) == key) {
+            if let Some(old) = scalars.iter_mut().find(|old| identity(old) == key) {
                 *old = baseline_expected(edit.clone(), old);
             } else {
-                merged.push(edit.clone());
+                scalars.push(edit.clone());
             }
         }
-        // Returning a scalar to its original bytes clears its dirty state. History
-        // still keeps the transaction, so Undo can restore the previous draft.
-        merged.retain(|edit| !unchanged(edit));
-        // This also caps the total edited fields at 256, not just the transaction size.
-        writer::candidate(&self.original, &self.source_sha256, &merged, &mut keep).map_err(error)?;
+        scalars.retain(|edit| !unchanged(edit));
+        let mut merged_texts = self.text_edits().to_vec();
+        for edit in texts {
+            let key = text_identity(edit);
+            if let Some(old) = merged_texts.iter_mut().find(|old| text_identity(old) == key) {
+                *old = baseline_text_expected(edit.clone(), old)?;
+            } else {
+                merged_texts.push(edit.clone());
+            }
+        }
+        merged_texts.retain(|edit| !unchanged_text(edit));
+        let payload_bytes = payload_cost(&scalars, &merged_texts)?;
+        let retained = self
+            .versions
+            .iter()
+            .take(self.cursor + 1)
+            .try_fold(0usize, |n, v| n.checked_add(v.payload_bytes))
+            .ok_or_else(|| "Draft history payload size overflow".to_owned())?;
+        if retained.checked_add(payload_bytes).is_none_or(|n| n > HISTORY_PAYLOAD_LIMIT) {
+            return Err("Draft history exceeds the 16 MiB edit-payload budget; export before starting another draft".into());
+        }
+        // Validate baseline expectations and total fields before replacing any history or revision.
+        validate(&self.original, &self.source_sha256, &scalars, &merged_texts, &mut keep)?;
         self.versions.truncate(self.cursor + 1);
-        self.versions.push(merged);
+        self.versions.push(Arc::new(Version { scalars, texts: merged_texts, payload_bytes }));
         self.cursor += 1;
         self.revision = next;
         Ok(())
@@ -99,6 +137,48 @@ impl Draft {
         self.revision = next;
         Ok(())
     }
+}
+fn validate(raw: &[u8], hash: &str, scalars: &[ScalarEdit], texts: &[TextEdit], keep: &mut dyn FnMut(f32) -> bool) -> Result<(), String> {
+    if texts.is_empty() {
+        writer::candidate(raw, hash, scalars, keep).map(|_| ()).map_err(error)
+    } else {
+        mixed::candidate(raw, hash, scalars, texts, keep).map(|_| ()).map_err(error)
+    }
+}
+fn text_identity(edit: &TextEdit) -> String {
+    match edit {
+        TextEdit::TaskName { task_guid, .. } => format!("name/{task_guid}"),
+        TextEdit::TaskDisplayId { task_guid, .. } => format!("id/{task_guid}"),
+    }
+    .to_ascii_lowercase()
+}
+fn unchanged_text(edit: &TextEdit) -> bool {
+    match edit {
+        TextEdit::TaskName { expected, value, .. } | TextEdit::TaskDisplayId { expected, value, .. } => expected == value,
+    }
+}
+fn baseline_text_expected(mut edit: TextEdit, old: &TextEdit) -> Result<TextEdit, String> {
+    match (&mut edit, old) {
+        (TextEdit::TaskName { expected, .. }, TextEdit::TaskName { expected: original, .. })
+        | (TextEdit::TaskDisplayId { expected, .. }, TextEdit::TaskDisplayId { expected: original, .. }) => *expected = original.clone(),
+        _ => return Err("Mismatched task text identity".into()),
+    }
+    Ok(edit)
+}
+fn payload_cost(scalars: &[ScalarEdit], texts: &[TextEdit]) -> Result<usize, String> {
+    // Account for strings plus conservative per-field storage; shared Version snapshots
+    // make cloning a session independent of the retained text payload size.
+    let initial = scalars.len().checked_mul(512).ok_or_else(|| "Draft payload size overflow".to_owned())?;
+    texts.iter().try_fold(initial, |n, edit| {
+        let (id, expected, value) = match edit {
+            TextEdit::TaskName { task_guid, expected, value } | TextEdit::TaskDisplayId { task_guid, expected, value } => (task_guid, expected, value),
+        };
+        n.checked_add(512)
+            .and_then(|n| n.checked_add(id.len()))
+            .and_then(|n| n.checked_add(expected.len()))
+            .and_then(|n| n.checked_add(value.len()))
+            .ok_or_else(|| "Draft payload size overflow".to_owned())
+    })
 }
 fn unchanged(edit: &ScalarEdit) -> bool {
     match edit {
@@ -147,7 +227,13 @@ mod tests {
     }
     #[test]
     fn undo_redo_revision_guards_and_branching() {
-        let mut draft = Draft { original: Arc::from([]), source_sha256: String::new(), versions: vec![vec![], vec![]], cursor: 1, revision: 5 };
+        let mut draft = Draft {
+            original: Arc::from([]),
+            source_sha256: String::new(),
+            versions: vec![Arc::new(Version::default()), Arc::new(Version::default())],
+            cursor: 1,
+            revision: 5,
+        };
         assert!(draft.undo(4).is_err());
         assert_eq!(draft.revision, 5);
         draft.undo(5).unwrap();

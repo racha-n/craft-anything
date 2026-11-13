@@ -3,6 +3,7 @@
 mod actual_expenses;
 mod definitions;
 pub mod draft;
+pub mod mixed;
 mod resource_tree;
 mod scene_geometry;
 mod scene_graph;
@@ -1146,6 +1147,93 @@ mod tests {
         assert!(candidate(&raw, &hash, &vec![valid.clone(); 257], |_| true).is_err());
         assert!(candidate(&raw, &"0".repeat(64), std::slice::from_ref(&valid), |_| true).is_err());
         assert!(candidate(&raw, &hash, &[valid], |_| false).is_err());
+    }
+    #[test]
+    fn mixed_draft_transactions_undo_redo_branch_and_reject_atomically() {
+        use task_strings::TextEdit;
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let hash = parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let mut draft = draft::Draft::open(raw.clone(), &hash, |_| true).unwrap();
+        let guid = "11111111-1111-1111-1111-111111111111".to_owned();
+        let duration = |expected, value| writer::ScalarEdit::TaskDuration { task_guid: guid.clone(), expected_storage: expected, value_storage: value };
+        let name = |expected: &str, value: &str| TextEdit::TaskName { task_guid: guid.clone(), expected: expected.into(), value: value.into() };
+        let id = TextEdit::TaskDisplayId { task_guid: guid.clone(), expected: "1".into(), value: "TASK_\u{03b1}".into() };
+        draft.apply_mixed(0, &[duration(0, 42)], &[name("A", "\u{6881}_\u{1f600}"), id], |_| true).unwrap();
+        assert_eq!(draft.edit_count(), 3);
+        assert_eq!(draft.source_sha256, hash);
+        let edited = draft.bytes(|_| true).unwrap();
+        let parsed = parse_metadata(&edited, |_| true).unwrap();
+        assert_eq!(parsed.metadata["tasks"][0]["name"], "\u{6881}_\u{1f600}");
+        assert_eq!(parsed.metadata["tasks"][0]["display_id"], "TASK_\u{03b1}");
+        assert_eq!(parsed.metadata["tasks"][0]["duration_storage_scalar"], 42);
+        let candidate = draft.candidate(|_| true).unwrap();
+        assert_eq!(candidate.receipt.version, 2);
+        assert_eq!(candidate.receipt.source_sha256, hash);
+        assert_eq!(candidate.receipt.scalar_stage.output_sha256, candidate.receipt.text_stage.source_sha256);
+        assert_eq!(candidate.receipt.output_sha256, parsed.source_sha256);
+        assert!(!candidate.receipt.native_reopen_verified);
+        assert!(draft.apply_mixed(1, &[duration(42, 84)], &[name("stale", "B")], |_| true).is_err());
+        assert_eq!(draft.revision, 1);
+        assert_eq!(draft.bytes(|_| true).unwrap(), edited);
+        draft.undo(1).unwrap();
+        assert!(!draft.is_dirty());
+        assert_eq!(draft.bytes(|_| true).unwrap(), raw);
+        draft.redo(2).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), edited);
+        draft.undo(3).unwrap();
+        draft.apply_mixed(4, &[], &[name("A", "B")], |_| true).unwrap();
+        assert!(!draft.can_redo());
+        draft.apply_mixed(5, &[], &[name("B", "A")], |_| true).unwrap();
+        assert!(!draft.is_dirty());
+        assert_eq!(draft.bytes(|_| true).unwrap(), raw);
+        draft.undo(6).unwrap();
+        assert!(draft.is_dirty());
+        assert!(mixed::candidate(&raw, &hash, &vec![duration(0, 42); 2], &vec![name("A", "B"); 255], |_| true).is_err());
+    }
+    #[test]
+    fn mixed_draft_bounds_text_history_without_partial_revision_changes() {
+        use task_strings::TextEdit;
+        let single = metadata_task_section(false);
+        let record = &single[32..single.len() - 4];
+        let mut tasks = single[..28].to_vec();
+        tasks.extend(3u32.to_le_bytes());
+        for byte in [0x11, 0x22, 0x33] {
+            let mut row = record.to_vec();
+            row[12..28].fill(byte);
+            tasks.extend(row);
+        }
+        tasks.extend(CLOSE);
+        let raw = project_with_tasks(empty_section(), tasks);
+        let parsed = parse_metadata(&raw, |_| true).unwrap();
+        let ids = parsed.metadata["tasks"].as_array().unwrap().iter().map(|t| t["guid"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let mut draft = draft::Draft::open(raw, &parsed.source_sha256, |_| true).unwrap();
+        let mut current_name = "A".to_owned();
+        let mut current_id = "1".to_owned();
+        let mut limited = false;
+        for n in 0..64 {
+            let next = if n % 2 == 0 { "\u{6881}" } else { "\u{7d42}" }.repeat(16384);
+            let edits = ids
+                .iter()
+                .flat_map(|id| {
+                    [
+                        TextEdit::TaskName { task_guid: id.clone(), expected: current_name.clone(), value: next.clone() },
+                        TextEdit::TaskDisplayId { task_guid: id.clone(), expected: current_id.clone(), value: next.clone() },
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let revision = draft.revision;
+            let before = draft.bytes(|_| true).unwrap();
+            if let Err(error) = draft.apply_mixed(revision, &[], &edits, |_| true) {
+                assert!(error.contains("16 MiB"), "{error}");
+                assert_eq!(draft.revision, revision);
+                assert_eq!(draft.bytes(|_| true).unwrap(), before);
+                limited = true;
+                break;
+            }
+            current_name = next.clone();
+            current_id = next;
+        }
+        assert!(limited);
     }
     #[test]
     fn scalar_candidate_changes_only_requested_task_bytes() {

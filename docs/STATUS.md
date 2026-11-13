@@ -22,15 +22,25 @@ layers, locks, secrets, tools, wasm and formatting.
 Broader scheduling and assignment settings remain unadmitted; this is not release-ready
 authoring.
 
-### Isolated scalar draft interface (R3.14)
+### Source-bound draft interface (R3.14)
 
-SP scene views expose an experimental Project draft window with source-bound forms,
-undo/redo, read-only revision refresh and separate candidate export. The source viewport
-stays unchanged. The widget sequence was tested through the real engine against a
-temporary synthetic SP; Studio/Planning offscreen images were inspected. Main/CLI builds,
-925 UI/engine target tests (15 ignored), clippy and required static checks passed.
-Advanced fields retain source storage units; automatic scheduling, utilization policy
-and general native Save remain unadmitted. See [the supported contract](4d5d-completion.md).
+SP scene views expose a separate project draft with task name/ID and advanced scalar
+forms, shared atomic Apply, undo/redo, revision Refresh and no-clobber candidate export.
+The original file and viewport stay unchanged. History is capped at 64 transactions,
+256 changed fields and 16 MiB of retained edit payload. Scalar-only exports keep receipt
+v1; drafts with text changes emit v2 with both independently guarded stage receipts.
+
+The real widget sequence types Unicode, applies duration/name/ID together, recovers after
+a second client changes revision, exports and explicitly discards. Studio/Planning images
+were inspected using the CI-pinned font input. Main/CLI/check-tool builds, 2,717 formats/
+engine/UI target tests (25 ignored), all-target clippy and the required static checks
+passed. A controlled mixed candidate matched independent native UI editing and survived
+native Save/reopen with equal General/assignment values and both mesh instances retained.
+
+Automatic scheduling, utilization policy, structural authoring and general native Save
+remain unadmitted. A separate native Reschedule control exposed a localized Data Date
+versus raw-year mismatch; its explicit-date control is still pending. See
+[the contracts and acceptance scope](4d5d-completion.md).
 
 ### Guarded task text candidates (R3.14)
 
@@ -46,8 +56,7 @@ Save/reopen; its focused native screenshot was inspected.
 Formats/engine validation passed 2,476 target tests (19 ignored), CLI/check-tool builds,
 all-target clippy, layers, locks, secrets, tools, wasm, doctests and formatting. Nine
 generated text receipts validated against their version-1 schema. This remains an
-experimental candidate workflow; shared draft text forms, structural editing and general
-native Save remain pending. See [the contract and scope](4d5d-completion.md#task-text-storage-candidates).
+experimental candidate workflow; structural editing and general native Save remain pending. See [the contract and scope](4d5d-completion.md#task-text-storage-candidates).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

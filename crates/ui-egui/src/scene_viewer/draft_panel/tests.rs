@@ -67,7 +67,7 @@ fn settle(harness: &mut egui_kittest::Harness<'_, DraftPanel>) {
     }
 }
 #[test]
-fn widget_actions_refresh_shared_revision_and_export_without_changing_source() {
+fn widget_actions_refresh_shared_revision_and_export_mixed_without_changing_source() {
     use egui_kittest::kittest::Queryable as _;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("source.sp");
@@ -78,8 +78,19 @@ fn widget_actions_refresh_shared_revision_and_export_without_changing_source() {
     let panel = DraftPanel::new(engine.clone(), path.to_string_lossy().into_owned(), hash.clone());
     assert!(panel.active());
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
     settle(&mut h);
     assert!(h.state().state.snapshot.is_some(), "{}", h.state().state.status);
+    h.get_by_label("Task labels").click();
+    h.run();
+    for (label, value) in [("Task name", "\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}"), ("Display ID", "TASK_\u{03b1}")] {
+        h.get_by_label(label).focus();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        h.get_by_label(label).type_text(value);
+        h.run_steps(2);
+    }
     h.get_by_label("Advanced scalar fields").click();
     h.run();
     h.state_mut().state.fields.iter_mut().find(|f| matches!(f.original, ScalarEdit::TaskDuration { .. })).unwrap().text = "42".into();
@@ -87,6 +98,9 @@ fn widget_actions_refresh_shared_revision_and_export_without_changing_source() {
     h.get_by_label("Apply to draft").click();
     settle(&mut h);
     assert_eq!(h.state().state.snapshot.as_ref().unwrap().revision, 1);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().edit_count, 3);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().tasks[0].name, "\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}");
+
     h.get_by_label("Undo").click();
     settle(&mut h);
     assert!(!h.state().state.snapshot.as_ref().unwrap().dirty);
@@ -104,6 +118,8 @@ fn widget_actions_refresh_shared_revision_and_export_without_changing_source() {
     settle(&mut h);
     let output = dir.path().join("candidate.sp");
     h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
     h.get_by_label("I will validate this experimental candidate in the native application.").click();
     h.run();
     if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
@@ -117,13 +133,27 @@ fn widget_actions_refresh_shared_revision_and_export_without_changing_source() {
             h.render().unwrap().save(image).unwrap();
         }
     }
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
     h.get_by_label("Export candidate").click();
     settle(&mut h);
     let generated = std::fs::read(&output).unwrap();
     let parsed = craft_anything_formats::sp_project::parse_metadata(&generated, |_| true).unwrap();
     assert_eq!(parsed.metadata["tasks"][0]["duration_storage_scalar"], 42);
+    assert_eq!(parsed.metadata["tasks"][0]["name"], "\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}");
+    assert_eq!(parsed.metadata["tasks"][0]["display_id"], "TASK_\u{03b1}");
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 2);
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let path = std::path::PathBuf::from(folder).join("mixed-widget-receipt.json");
+        assert!(!path.exists());
+        std::fs::write(path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+
     assert_eq!(std::fs::read(&path).unwrap(), raw);
     assert!(h.state().state.snapshot.as_ref().unwrap().dirty);
+    h.get_by_label("Discard draft changes when closing").scroll_to_me();
+    h.run();
     h.get_by_label("Discard draft changes when closing").click();
     h.run();
     h.get_by_label("Close draft").click();
@@ -163,10 +193,12 @@ fn rejected_source_identity_and_older_responses_preserve_dirty_preview() {
     let source = "a".repeat(64);
     let mut state = State::default();
     state.accept(snapshot(1, 3), &source, Some(1)).unwrap();
+    state.labels.name = "Unapplied label".into();
     assert!(state.accept(snapshot(2, 4), &source, Some(1)).is_err());
     assert!(state.accept(snapshot(1, 4), &"b".repeat(64), Some(1)).is_err());
     assert!(state.accept(snapshot(1, 2), &source, Some(1)).is_err());
     assert_eq!(state.snapshot.as_ref().unwrap().revision, 3);
+    assert_eq!(state.labels.name, "Unapplied label");
     assert!(state.snapshot.as_ref().unwrap().dirty);
     let encoded = serde_json::to_string(&state).unwrap();
     let decoded: State = serde_json::from_str(&encoded).unwrap();
@@ -196,4 +228,36 @@ fn paired_assignment_form_uses_ordinal_and_resource_even_with_shared_profile() {
     let rate = form.iter_mut().find(|f| matches!(f.original, ScalarEdit::AssignmentPlannedRate { assignment_ordinal: 1, .. })).unwrap();
     rate.text = "NaN".into();
     assert!(rate.proposal().is_err());
+}
+
+#[test]
+fn task_labels_bind_current_identity_and_count_utf16_units() {
+    let snapshot = snapshot(1, 0);
+    let task = &snapshot.tasks[0];
+    let mut labels = TaskLabels::from_task(task);
+    assert!(labels.proposals(task).unwrap().is_empty());
+    labels.name = "\u{6881}".into();
+    labels.display_id = "TASK_\u{03b1}".into();
+    let edits = labels.proposals(task).unwrap();
+    assert!(matches!(&edits[0],TextEdit::TaskName{task_guid,expected,..} if task_guid==&task.guid && expected==&task.name));
+    assert!(matches!(&edits[1],TextEdit::TaskDisplayId{task_guid,expected,..} if task_guid==&task.guid && expected==&task.display_id));
+    labels.name = "\u{1f600}".repeat(8193);
+    assert!(labels.proposals(task).is_err());
+    labels.name = "valid".into();
+    labels.display_id = "bad\0id".into();
+    assert!(labels.proposals(task).is_err());
+}
+
+#[test]
+fn task_selector_bounds_preview_but_keeps_full_editor_text() {
+    let mut snapshot = snapshot(1, 0);
+    let task = &mut snapshot.tasks[0];
+    task.display_id.clear();
+    task.name = "\u{6881}".repeat(16384);
+    let preview = task.label();
+    assert_eq!(preview.chars().count(), 193);
+    assert!(preview.ends_with('\u{2026}'));
+    let labels = TaskLabels::from_task(task);
+    assert_eq!(labels.name, task.name);
+    assert!(labels.proposals(task).unwrap().is_empty());
 }

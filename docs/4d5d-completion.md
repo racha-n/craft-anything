@@ -226,3 +226,62 @@ Frozen-source validation passed CLI/check-tool builds, 2,476 formats/engine targ
 (19 ignored), all-target clippy, layers, locks, secrets, tools, wasm, doctests and formatting.
 All nine generated text receipts passed schema validation. Original/native source hashes
 were retained; private fixtures and native automation are not part of the public sources.
+
+## Mixed draft transactions and receipt version 2
+
+The shared draft accepts scalar and task-text changes in one atomic Apply request. Task
+labels and the current scalar form page are submitted together. Expected values bind to
+the current revision; retained edits keep their original source expectations for export.
+Undo, redo, branching and read-only Refresh cover both kinds in the same history. A stale
+text field rejects the entire transaction, including otherwise valid scalar changes.
+
+History retains at most 64 transactions and 256 changed fields, with a conservative
+16 MiB retained edit-payload budget. Immutable version snapshots are shared when a session
+is cloned. The source file and viewport caches stay unchanged. Returning all fields to
+their original values clears dirty state while preserving Undo. Task selectors show a
+bounded 192-character preview; label editors keep the full source text. Dirty close and
+explicit discard controls remain near the revision toolbar, above the expanding forms.
+
+Scalar-only exports retain the version-1 scalar tool and receipt. When text edits are
+present, `formats_project_sp_mixed_candidate_write` applies the scalar stage first and
+then the text stage, producing a [mixed receipt version 2](schemas/sp-mixed-candidate-receipt-v2.schema.json).
+Both original version-1 stage receipts remain embedded. Consumers must verify original
+source to scalar output, scalar output to text source, and text output to final output
+hashes, as well as the combined 256-field limit. Scalar offsets refer to the original
+source; text offsets refer to the intermediate scalar output. Existing v1 receipts are
+unchanged. A v1 artifact cannot become a mixed v2 receipt by changing its version number;
+regenerate from the hash-bound original source and explicitly supplied edits. Unsupported
+versions must be rejected. Native and derived-consistency flags remain false.
+
+The real widget regression types Unicode task labels, applies duration/name/ID together,
+undoes/redoes, recovers after a second client changes revision, exports a v2 candidate and
+explicitly discards the draft without changing the source. Studio/Planning offscreen
+images were inspected with the same pinned font input used by CI; builds without that
+optional input cannot demonstrate Thai/CJK glyph coverage. See [font packaging](releasing.md).
+
+An independent native control combined a four-day duration, coordinated raw utilization
+125, renamed task and changed ID on the assigned geometry-bearing singleton. The mixed
+candidate matched its decoded Tasks exactly and survived native Save/unload/reopen.
+Observed General/assignment values, typed task pages, geometry inventories and protected
+geometry/resource/calendar/profile payloads matched; both mesh instances remained visible
+in the inspected focused native screenshot. This remains one controlled storage case,
+not automatic quantity/rate coordination or general native authoring.
+
+Frozen validation passed all 11 checks: main/CLI/check-tool builds, five draft-panel widget
+and form regressions, 2,717 formats/engine/UI target tests (25 ignored), all-target clippy,
+layers, locks, secrets, tools, wasm, doctests and formatting. The widget and controlled
+native candidates' v2 receipts passed schema and hash-chain validation.
+
+## Relationship and scheduling controls remain separate
+
+Independent native type edits saved/reopened as FS=1, SF=2, SS=3 and FF=4; each isolated
+change affected only the type window. On the observed Project Calendar, typed lag 2d
+stored signed 57,600 and -1d stored -28,800, with only the eight-byte lag window changing.
+These controls did not invoke Reschedule and do not prove a scheduling algorithm.
+
+The observed native Reschedule options use Manual Data Date, ASAP, minute snapping,
+upstream-task calendars for links and retained logic for progressed tasks. A default
+Thai-era date display of 8/11/2569 produced raw task dates in Gregorian year 2569 after
+Reschedule/save/reopen. Its cause is unresolved; an explicit-date control remains pending.
+Do not infer the scheduler anchor from localized display text or silently subtract 543
+years. General rescheduling, critical paths, calendar editing and baselines remain open.

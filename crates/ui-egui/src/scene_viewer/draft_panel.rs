@@ -2,7 +2,7 @@
 use super::{SceneApp, project_panel};
 use crate::jobs::Jobs;
 use craft_anything_engine::{CallOptions, Caller, Engine, tools::scene_project_tools::TaskView};
-use craft_anything_formats::sp_project::writer::ScalarEdit;
+use craft_anything_formats::sp_project::{task_strings::TextEdit, writer::ScalarEdit};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -34,7 +34,13 @@ struct Task {
 }
 impl Task {
     fn label(&self) -> String {
-        if self.display_id.is_empty() { self.name.clone() } else { format!("{} · {}", self.display_id, self.name) }
+        let separator = if self.display_id.is_empty() { "" } else { " · " };
+        let mut chars = self.display_id.chars().chain(separator.chars()).chain(self.name.chars());
+        let mut label: String = chars.by_ref().take(192).collect();
+        if chars.next().is_some() {
+            label.push('\u{2026}');
+        }
+        label
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -146,6 +152,29 @@ fn fields(task: &Task, offset: usize) -> Vec<Field> {
     });
     task_fields.into_iter().chain(assignment_fields).chain(costs).skip(offset).take(32).collect()
 }
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct TaskLabels {
+    name: String,
+    display_id: String,
+}
+impl TaskLabels {
+    fn from_task(task: &Task) -> Self {
+        Self { name: task.name.clone(), display_id: task.display_id.clone() }
+    }
+    fn proposals(&self, task: &Task) -> Result<Vec<TextEdit>, String> {
+        if [&self.name, &self.display_id].iter().any(|v| v.contains('\0') || v.encode_utf16().count() > 16384) {
+            return Err("Task labels exceed the supported length or contain a null character.".into());
+        }
+        let mut edits = Vec::new();
+        if self.name != task.name {
+            edits.push(TextEdit::TaskName { task_guid: task.guid.clone(), expected: task.name.clone(), value: self.name.clone() });
+        }
+        if self.display_id != task.display_id {
+            edits.push(TextEdit::TaskDisplayId { task_guid: task.guid.clone(), expected: task.display_id.clone(), value: self.display_id.clone() });
+        }
+        Ok(edits)
+    }
+}
 #[derive(Default, Serialize, Deserialize)]
 struct State {
     show: bool,
@@ -155,6 +184,8 @@ struct State {
     selected: usize,
     field_offset: usize,
     fields: Vec<Field>,
+    #[serde(default)]
+    labels: TaskLabels,
     output: String,
     acknowledge: bool,
     discard: bool,
@@ -174,6 +205,7 @@ impl State {
         self.selected = self.selected.min(value.tasks.len().saturating_sub(1));
         self.field_offset = 0;
         self.fields = value.tasks.get(self.selected).map(|t| fields(t, 0)).unwrap_or_default();
+        self.labels = value.tasks.get(self.selected).map(TaskLabels::from_task).unwrap_or_default();
         self.snapshot = Some(value);
         self.discard = false;
         self.acknowledge = false;
@@ -266,6 +298,7 @@ impl DraftPanel {
                 Ok(Done::Closed) => {
                     self.state.snapshot = None;
                     self.state.fields.clear();
+                    self.state.labels = TaskLabels::default();
                     self.state.show = false;
                     self.state.status = "Draft closed.".into();
                 }
@@ -307,6 +340,10 @@ impl DraftPanel {
                     if ui.button("Refresh").clicked() { action = Some(("refresh", json!({"offset":snapshot.offset}))); }
                 });
                 ui.horizontal(|ui| {
+                    if snapshot.dirty { ui.checkbox(&mut self.state.discard, "Discard draft changes when closing"); }
+                    if ui.add_enabled(!snapshot.dirty || self.state.discard, egui::Button::new("Close draft")).clicked() { action = Some(("close", json!({"discard_changes":self.state.discard}))); }
+                });
+                ui.horizontal(|ui| {
                     if ui.add_enabled(snapshot.offset > 0, egui::Button::new("Previous tasks")).clicked() { action = Some(("refresh", json!({"offset":snapshot.offset.saturating_sub(100)}))); }
                     ui.label(format!("{} / {} tasks", snapshot.offset.saturating_add(snapshot.tasks.len()), snapshot.task_total));
                     if ui.add_enabled(snapshot.offset.saturating_add(snapshot.tasks.len()) < snapshot.task_total, egui::Button::new("Next tasks")).clicked() { action = Some(("refresh", json!({"offset":snapshot.offset.saturating_add(100)}))); }
@@ -316,11 +353,20 @@ impl DraftPanel {
                     for (index, task) in snapshot.tasks.iter().enumerate() { ui.selectable_value(&mut self.state.selected, index, task.label()).on_hover_text(&task.guid); }
                 });
                 if let Some(task) = snapshot.tasks.get(self.state.selected) {
-                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); }
+                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); self.state.labels = TaskLabels::from_task(task); }
                     if let Some(derived) = snapshot.derived_tasks.items.iter().find(|t| t.guid == task.guid) {
                         ui.label(derived.planned_start.zip(derived.planned_finish).map(|(a,b)| format!("Preview dates: {} → {}", project_panel::wallclock(a), project_panel::wallclock(b))).unwrap_or_else(|| "Preview dates unresolved".into()));
                         for reason in derived.unresolved_reasons.iter().take(4) { ui.small(reason); }
                     }
+                    ui.collapsing("Task labels", |ui| {
+                        ui.small("Labels stay in this draft until you export a separate copy.");
+                        for (label,text) in [("Task name",&mut self.state.labels.name),("Display ID",&mut self.state.labels.display_id)] {
+                            ui.horizontal(|ui| {
+                                let label = ui.add_sized(egui::vec2(96.,ui.spacing().interact_size.y),egui::Label::new(label));
+                                ui.add(egui::TextEdit::singleline(text).char_limit(16384).desired_width(ui.available_width().clamp(180.,600.))).labelled_by(label.id);
+                            });
+                        }
+                    });
                     ui.collapsing("Advanced scalar fields", |ui| {
                         ui.small("Values use source storage units. Quantity and utilization are separate fields; changed fields on this page are applied together.");
                         ui.horizontal(|ui| {
@@ -330,19 +376,23 @@ impl DraftPanel {
                         egui::ScrollArea::vertical().id_salt("draft_fields").max_height(280.).show(ui, |ui| {
                             for (index, field) in self.state.fields.iter_mut().enumerate() { ui.push_id(index, |ui| { ui.horizontal(|ui| { let label_width = (ui.available_width() - 180.).clamp(120., 420.); let label = ui.add_sized(egui::vec2(label_width, ui.spacing().interact_size.y), egui::Label::new(&field.label).truncate()).on_hover_text(&field.label); ui.add(egui::TextEdit::singleline(&mut field.text).char_limit(64).desired_width(170.)).labelled_by(label.id); }); }); }
                         });
-                        let proposals = self.state.fields.iter().map(Field::proposal).collect::<Result<Vec<_>, _>>();
-                        match proposals {
-                            Ok(values) => { let edits = values.into_iter().flatten().collect::<Vec<_>>(); if ui.add_enabled(!edits.is_empty(), egui::Button::new("Apply to draft")).clicked() { action = Some(("apply", json!({"edits":edits}))); } }
-                            Err(error) => { ui.label(error); }
-                        }
                     });
+                    let proposals = self.state.fields.iter().map(Field::proposal).collect::<Result<Vec<_>, _>>();
+                    match (proposals,self.state.labels.proposals(task)) {
+                        (Ok(values),Ok(text_edits)) => {
+                            let edits=values.into_iter().flatten().collect::<Vec<_>>();
+                            ui.small("Apply changed labels and the current scalar page together.");
+                            if ui.add_enabled(!edits.is_empty() || !text_edits.is_empty(),egui::Button::new("Apply to draft")).clicked() {
+                                action=Some(("apply",json!({"edits":edits,"text_edits":text_edits})));
+                            }
+                        }
+                        (Err(error),_) | (_,Err(error)) => {ui.label(error);}
+                    }
                 }
                 ui.separator();
                 ui.horizontal(|ui| { ui.add(egui::TextEdit::singleline(&mut self.state.output).char_limit(2048).hint_text("New absolute .sp output path")); if ui.button("Choose output").clicked() { choose = true; } });
                 ui.checkbox(&mut self.state.acknowledge, "I will validate this experimental candidate in the native application.");
                 if ui.add_enabled(self.state.acknowledge && !self.state.output.is_empty(), egui::Button::new("Export candidate")).clicked() { action = Some(("write_candidate", json!({"output_path":self.state.output,"acknowledge_storage_only":true}))); }
-                if snapshot.dirty { ui.checkbox(&mut self.state.discard, "Discard draft changes when closing"); }
-                if ui.add_enabled(!snapshot.dirty || self.state.discard, egui::Button::new("Close draft")).clicked() { action = Some(("close", json!({"discard_changes":self.state.discard}))); }
             });
         });
         self.state.show = show;

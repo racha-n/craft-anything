@@ -9,7 +9,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::ToolError;
-use craft_anything_formats::sp_project::{self, draft::Draft, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{self, draft::Draft, task_strings::TextEdit, writer::ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -48,6 +48,8 @@ enum Request {
         expected_source_sha256: String,
         revision: u64,
         edits: Vec<ScalarEdit>,
+        #[serde(default)]
+        text_edits: Vec<TextEdit>,
     },
     Undo {
         draft_id: u64,
@@ -78,7 +80,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound scalar draft, apply atomic edits, undo/redo or publish a separate experimental SP candidate. Does not admit native saving or rescheduling.",
+        "Open a source-bound scalar/text draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. Does not admit native saving or rescheduling.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -138,11 +140,20 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             ctx.session.ext.remove::<EditSession>();
             return Ok(ToolOutput::Value(json!({"version":1,"draft_id":session.id,"closed":true})));
         }
-        Request::Apply { revision, edits, .. } => session.draft.apply(revision, &edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?,
+        Request::Apply { revision, edits, text_edits, .. } => {
+            session.draft.apply_mixed(revision, &edits, &text_edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?
+        }
         Request::Undo { revision, .. } => session.draft.undo(revision).map_err(ToolError::invalid)?,
         Request::Redo { revision, .. } => session.draft.redo(revision).map_err(ToolError::invalid)?,
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
+            if !session.draft.text_edits().is_empty() {
+                return project_candidate_tools::run_mixed(
+                    ctx,
+                    json!({"path":session.path,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,
+                        "acknowledge_storage_only":acknowledge_storage_only,"edits":session.draft.edits(),"text_edits":session.draft.text_edits()}),
+                );
+            }
             return project_candidate_tools::run(
                 ctx,
                 json!({"path":session.path,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,"acknowledge_storage_only":acknowledge_storage_only,"edits":session.draft.edits()}),
@@ -161,7 +172,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let tasks = imported.metadata.get("tasks").and_then(Value::as_array).ok_or_else(|| ToolError::invalid("Draft task inventory is missing."))?;
     let result = json!({"version":1,"draft_id":session.id,"source_sha256":session.draft.source_sha256,"draft_sha256":imported.source_sha256,
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
-        "edit_count":session.draft.edits().len(),"task_total":tasks.len(),"offset":offset,
+        "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
         "tasks":tasks.iter().skip(offset).take(100).collect::<Vec<_>>(),"derived_tasks":model.page_tasks(offset,100),
         "native_reopen_verified":false,"derived_schedule_consistency_verified":false});
     ctx.session.ext.insert(Arc::new(DraftSequence(session.id)));
@@ -218,6 +229,49 @@ mod tests {
             raw[at..at + 8].copy_from_slice(&(offset + delta as u64).to_le_bytes());
         }
         raw
+    }
+    #[test]
+    fn mixed_draft_exports_version_two_and_keeps_original_source_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = fixture();
+        std::fs::write(&path, &raw).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&raw));
+        let engine = Engine::new(crate::testing::session());
+        let call = |params| engine.call("formats_project_edit", params, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let id = opened["draft_id"].as_u64().unwrap();
+        let request = |action, revision| json!({"action":action,"draft_id":id,"revision":revision,"expected_source_sha256":hash});
+        let mut apply = request("apply", 0);
+        apply["edits"] = json!([{"field":"task_duration","task_guid":"11111111-1111-1111-1111-111111111111","expected_storage":0,"value_storage":42}]);
+        apply["text_edits"] = json!([{"field":"task_name","task_guid":"11111111-1111-1111-1111-111111111111","expected":"A","value":"\u{6881}_\u{1f600}"}]);
+        let changed = call(apply).unwrap();
+        assert_eq!(changed["edit_count"], 2);
+        assert_eq!(changed["tasks"][0]["name"], "\u{6881}_\u{1f600}");
+        assert_eq!(changed["tasks"][0]["duration_storage_scalar"], 42);
+        let output = dir.path().join("mixed.sp");
+        let mut export = request("write_candidate", 1);
+        export["output_path"] = json!(output);
+        export["acknowledge_storage_only"] = json!(true);
+        call(export.clone()).unwrap();
+        let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt["version"], 2);
+        assert_eq!(receipt["scalar_stage"]["output_sha256"], receipt["text_stage"]["source_sha256"]);
+        assert_eq!(receipt["source_sha256"], hash);
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+        assert!(call(export).is_err());
+        let undone = call(request("undo", 1)).unwrap();
+        assert_eq!(undone["dirty"], false);
+        let redone = call(request("redo", 2)).unwrap();
+        assert_eq!(redone["tasks"][0]["name"], "\u{6881}_\u{1f600}");
+        let stale = dir.path().join("stale.sp");
+        let mut export = request("write_candidate", 3);
+        export["output_path"] = json!(stale);
+        export["acknowledge_storage_only"] = json!(true);
+        std::fs::write(&path, b"changed source").unwrap();
+        assert!(call(export).is_err());
+        assert!(!stale.exists());
+        assert_eq!(call(request("inspect", 3)).unwrap()["dirty"], true);
     }
     #[test]
     fn engine_draft_guards_transactions_publication_and_reopened_session_identity() {
