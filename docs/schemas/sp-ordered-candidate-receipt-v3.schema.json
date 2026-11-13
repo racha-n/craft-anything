@@ -47,7 +47,14 @@
       "type": "array",
       "maxItems": 8,
       "items": {
-        "$ref": "sp-task-order-candidate-receipt-v1.schema.json"
+        "oneOf": [
+          {
+            "$ref": "sp-task-order-candidate-receipt-v1.schema.json"
+          },
+          {
+            "$ref": "sp-task-order-candidate-receipt-v2.schema.json"
+          }
+        ]
       }
     }
   },

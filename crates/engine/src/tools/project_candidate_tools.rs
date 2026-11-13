@@ -107,7 +107,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "formats_project_sp_task_order_candidate_write",
             "Write an experimental task order candidate",
-            "Reorder one existing Planned unassigned task subtree within its sibling list in a source-bound project of at most 512 tasks. Guard parent and position, preserve complete subtree bytes and other sections, and publish separate candidate/receipt files without replacement. Does not change parents, recalculate schedules or certify native saving.",
+            "Reorder one existing Planned unassigned task subtree within its sibling list in a source-bound project of at most 512 tasks. Guard parent, position and collection lookup indices; preserve task content and other sections, rebuild sibling lookup indices, and publish separate candidate/version-2 receipt files without replacement. Does not change parents, recalculate schedules or certify native saving.",
             "Create a separate test copy with changed task order. Validate it in the source application before relying on it.",
             Toolset::Formats,
             Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -244,7 +244,7 @@ fn run_relocation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolEr
         .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
         .limitation(Limitation::new(
             "native_persistence_unverified",
-            "Internal reparse and subtree preservation passed; native acceptance and schedule coordination remain unverified.",
+            "Internal reparse, task content preservation and sibling lookup validation passed; native acceptance and schedule coordination remain unverified.",
         ))
         .target_content(true)
         .build()?;

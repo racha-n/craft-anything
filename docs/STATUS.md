@@ -76,13 +76,29 @@ the two explicit-anchor native FS/lag 0 and FS/lag 2d controls; both inputs stay
 unchanged. Generic native parity and critical-path flags remain false. General Plan
 rescheduling, native write-back and baselines remain unadmitted.
 
-### Whole-subtree sibling order candidates (R3.14)
+### Task sibling order candidates (R3.14)
 
 A headless candidate tool changes an existing task's position within its current
 sibling collection. Source SHA-256, GUID, parent and source-position guards apply;
-complete subtree bytes and all other stored sections stay unchanged. The current
+task bodies and descendants plus all other stored sections stay unchanged, while
+the affected collection's GUID lookup vector is validated and rebuilt. The current
 subset is at most 512 Planned tasks without assignments, links, costs, progress,
-codes or user values. Parent changes and draft/UI movement integration remain open.
+codes or user values. Parent changes remain open; draft/UI movement is integrated.
+
+The original writer incorrectly carried lookup entries with task records. A private
+negative control displayed duplicated/missing tasks in the native grid while our
+reader still saw all task bodies. Three-task cycles expose the preservation error
+that earlier adjacent swaps missed. The version-2 correction now validates source
+indices and rebuilds them from stored GUID-byte order. Earlier proofs below cover
+their observed cases; historical version-1 order candidates should be regenerated.
+
+All 11 frozen checks passed: seven focused formats regressions, nine widget tests,
+main/CLI builds, 2,735 target tests (25 ignored), clippy, layers, locks, secrets,
+tools, wasm, doctests and formatting. The latest CLI's three-task cycle matched
+independent native Tasks and preserved the other 47 sections; its native Save/unload/
+reopen retained Tasks and all three tasks' identity/date/duration values. Two sequential
+moves produced the same candidate, with valid version-2/version-3 receipts and hash
+chains. Candidate/receipt bytes and 57 protected sources stayed unchanged.
 
 Latest CLI up/restore/no-op controls matched native Tasks, passed the version-1
 receipt schema and refused replacement. A three-root native Up control also matched

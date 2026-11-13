@@ -1165,6 +1165,14 @@ choices expose labels. Inspect the tree and query each control by the field it u
 Read generated JSON as UTF-8 explicitly on Windows; the active ANSI code page can
 reject or silently garble non-ASCII receipt values.
 
+**A trailing collection entry need not belong to the preceding object.** Task
+collections interleave task bodies with entries from a GUID-sorted lookup vector.
+Moving those entries with the bodies passed adjacent-swap controls but failed a
+three-task cycle, producing duplicate native grid rows even though our metadata
+reader still found every task. Validate and rebuild the collection lookup vector;
+test non-involutive permutations and native GUID-based properties after reopening.
+Byte preservation and self-reparse alone do not establish semantic compatibility.
+
 
 **A small native window can hide a planning pane.** Resizing the native planning app
 to a fixed 1,000-pixel height collapsed its Gantt area without closing the project or

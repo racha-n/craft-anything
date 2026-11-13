@@ -19,7 +19,7 @@ fn fixture() -> Vec<u8> {
         let mut task = record.to_vec();
         task[12..28].fill(i);
         let end = task.len();
-        task[end - 4..].copy_from_slice(&(90 + u32::from(i)).to_le_bytes());
+        task[end - 4..].copy_from_slice(&(u32::from(i) - 1).to_le_bytes());
         data.extend(task);
     }
     data.extend(super::super::CLOSE);

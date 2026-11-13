@@ -330,14 +330,15 @@ the general Plan rescheduling command and native authoring acceptance remain sep
 its current sibling collection. Source SHA-256, task GUID, expected parent GUID (null
 for roots) and expected sibling position are mandatory guards. The destination index
 is measured after removing the moving subtree. No-op candidates retain original file
-bytes. A candidate keeps each sibling subtree byte-identical, including descendants
-and opaque trailing words, reparses parent/order identity, and preserves all 47 other
-section payloads. The version-1 receipt has a separate schema and keeps native-reopen
+bytes. A candidate preserves task bodies and descendants, validates each collection's
+GUID lookup vector, rebuilds the affected sibling lookup vector, reparses parent/order
+identity, and preserves all 47 other section payloads. The version-2 receipt has a
+separate schema and keeps native-reopen
 and derived-schedule flags false. Publication uses new candidate/receipt paths only.
 
 The current subset contains at most 512 Planned tasks without assignments, links,
 costs, progress records, activity codes or user values. It does not change parents,
-create/delete tasks, integrate into draft history, recalculate schedules or enable the
+create/delete tasks, recalculate schedules or enable the
 general Plan movement commands. These capabilities remain separate pending changes.
 
 An independent two-root native Up control saved/reopened in reversed order. Its whole
@@ -357,10 +358,33 @@ the independent control. General properties were not rechecked in that round tri
 the native screenshot was inspected. This certifies those observed cases only, and
 the generic receipt's native-acceptance and recalculation flags remain false.
 
+The original whole-record preservation rule was incomplete: serialized trailing words
+collectively form a GUID-sorted lookup vector into the physical sibling records. They
+are not per-task fields. Adjacent swaps from the identity vector did not expose this
+error; a three-task cycle does. Version-1 order receipts and those earlier native
+controls do not establish general order compatibility. Current candidates require
+valid source lookup vectors and rebuild their indices using stored GUID-byte order.
+Task bodies and descendants remain exact; the legacy subtree-preservation field now
+reports the actual result, while explicit content/index flags describe the new contract.
+Regenerate historical version-1 order candidates from a verified original source;
+inconsistent source lookup vectors are refused rather than silently repaired.
+
+The corrected CLI's three-task cycle exactly matched independent native Tasks and
+preserved all 47 other stored sections. Two sequential moves produced the same file
+as the single cycle; version-2 receipts and the version-3 envelope passed schemas and
+hash-chain checks. The latest CLI candidate passed native Save/unload/reopen with
+GUID/name/ID/type/status/start/finish/duration equal for all three tasks, and its Tasks
+remained exact. Candidate/receipt bytes and 57 protected sources stayed unchanged.
+All 11 frozen checks passed: seven focused formats regressions, nine widget tests,
+main/CLI builds, 2,735 target tests (25 ignored), clippy, layers, locks, secrets,
+tools, wasm, doctests and formatting. Both draft layouts were inspected. This remains
+an experimental same-parent operation; general reparenting and native Save are separate.
+
 Frozen validation passed all 11 checks: four focused regressions, main/CLI/check-tool
 builds, 2,485 formats/engine target tests (19 ignored), all-target clippy, layers,
 locks, secrets, tools, wasm, doctests and formatting. Nested synthetic cases preserve
-complete descendant subtrees and opaque tails; stale identity/position, cancellation,
+complete descendant subtrees; the original opaque-tail preservation claim above is
+superseded by the lookup correction. Stale identity/position, cancellation,
 linked tasks and valid sources exceeding the 512-task budget are refused.
 
 ## Shared field and task-order drafts
@@ -370,7 +394,8 @@ sequential same-parent order operations and 256 fields/operations combined. Each
 guards the current task GUID, parent and sibling position. Field expectations remain
 bound to the original source; moves run after the field stages and bind to the prior
 intermediate hash. A version-3 receipt retains the original version-2 mixed receipt
-and every version-1 order receipt. Consumers must check the complete hash chain.
+and every order receipt. New order stages use version 2; the version-3 envelope schema
+also accepts retained historical version-1 stages. Consumers must check the complete hash chain.
 The standalone headless tool is `formats_project_sp_ordered_candidate_write`;
 draft export selects it when order operations remain.
 Existing scalar-only and text-containing exports retain their version-1/version-2

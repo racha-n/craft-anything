@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Experimental SP task order candidate receipt version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "source_sha256",
+    "output_sha256",
+    "admitted_build",
+    "sections",
+    "internal_reparse_passed",
+    "native_reopen_verified",
+    "limitations",
+    "relocation",
+    "task_count",
+    "task_subtree_bytes_preserved",
+    "derived_schedule_recalculated",
+    "task_content_bytes_preserved",
+    "sibling_lookup_index_validated",
+    "sibling_lookup_index_rebuilt"
+  ],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "source_sha256": {
+      "$ref": "#/$defs/hash"
+    },
+    "output_sha256": {
+      "$ref": "#/$defs/hash"
+    },
+    "admitted_build": {
+      "const": "6.5.5.28"
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 48,
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source_stored_sha256",
+          "output_stored_sha256",
+          "stored_bytes_preserved"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "source_stored_sha256": {
+            "$ref": "#/$defs/hash"
+          },
+          "output_stored_sha256": {
+            "$ref": "#/$defs/hash"
+          },
+          "stored_bytes_preserved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "internal_reparse_passed": {
+      "const": true
+    },
+    "native_reopen_verified": {
+      "const": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "relocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_guid",
+        "expected_parent_guid",
+        "expected_sibling_index",
+        "sibling_index"
+      ],
+      "properties": {
+        "task_guid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+        },
+        "expected_parent_guid": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_sibling_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 511
+        },
+        "sibling_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 511
+        }
+      }
+    },
+    "task_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 512
+    },
+    "task_subtree_bytes_preserved": {
+      "type": "boolean"
+    },
+    "derived_schedule_recalculated": {
+      "const": false
+    },
+    "task_content_bytes_preserved": {
+      "const": true
+    },
+    "sibling_lookup_index_validated": {
+      "const": true
+    },
+    "sibling_lookup_index_rebuilt": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

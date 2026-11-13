@@ -5,12 +5,12 @@ fn id(byte: u8) -> String {
     let b = format!("{byte:02x}");
     format!("{}-{}-{}-{}-{}", b.repeat(4), b.repeat(2), b.repeat(2), b.repeat(2), b.repeat(6))
 }
-fn record(byte: u8, opaque_tail: u32) -> Vec<u8> {
+fn record(byte: u8, lookup_index: u32) -> Vec<u8> {
     let original = metadata_task_section(false);
     let mut task = original[32..original.len() - 4].to_vec();
     task[12..28].fill(byte);
     let end = task.len();
-    task[end - 4..].copy_from_slice(&opaque_tail.to_le_bytes());
+    task[end - 4..].copy_from_slice(&lookup_index.to_le_bytes());
     task
 }
 fn section(records: &[Vec<u8>]) -> Vec<u8> {
@@ -24,7 +24,7 @@ fn section(records: &[Vec<u8>]) -> Vec<u8> {
     data
 }
 fn fixture() -> Vec<u8> {
-    project_with_tasks(empty_section(), section(&[record(1, 77), record(2, 9), record(3, 500)]))
+    project_with_tasks(empty_section(), section(&[record(1, 0), record(2, 1), record(3, 2)]))
 }
 fn movement(task: u8, parent: Option<u8>, old_index: usize, index: usize) -> Move {
     Move { task_guid: id(task), expected_parent_guid: parent.map(id), expected_sibling_index: old_index, sibling_index: index }
@@ -46,13 +46,16 @@ fn nest(mut parent: Vec<u8>, children: &[Vec<u8>]) -> Vec<u8> {
 }
 
 #[test]
-fn root_reorder_preserves_opaque_tails_subtree_bytes_and_all_other_sections() {
+fn three_cycle_rebuilds_lookup_vector_and_preserves_task_content_and_other_sections() {
     let raw = fixture();
     let moved = apply(&raw, &movement(3, None, 2, 0));
-    let expected = project_with_tasks(empty_section(), section(&[record(3, 500), record(1, 77), record(2, 9)]));
+    let expected = project_with_tasks(empty_section(), section(&[record(3, 1), record(1, 2), record(2, 0)]));
     assert_eq!(moved.bytes, expected);
     assert!(moved.receipt.sections.iter().filter(|s| s.name != "Tasks").all(|s| s.stored_bytes_preserved));
-    assert!(moved.receipt.task_subtree_bytes_preserved);
+    assert!(!moved.receipt.task_subtree_bytes_preserved);
+    assert!(moved.receipt.task_content_bytes_preserved);
+    assert!(moved.receipt.sibling_lookup_index_validated);
+    assert!(moved.receipt.sibling_lookup_index_rebuilt);
     assert!(!moved.receipt.native_reopen_verified);
     assert!(!moved.receipt.derived_schedule_recalculated);
     assert_eq!(apply(&moved.bytes, &movement(3, None, 0, 2)).bytes, raw);
@@ -61,11 +64,14 @@ fn root_reorder_preserves_opaque_tails_subtree_bytes_and_all_other_sections() {
 
 #[test]
 fn sibling_reorder_keeps_descendants_and_unrelated_roots_exact() {
-    let child = nest(record(2, 12), &[record(4, 99)]);
-    let parent = nest(record(1, 77), &[child.clone(), record(3, 333)]);
-    let raw = project_with_tasks(empty_section(), section(&[parent, record(5, 555)]));
+    let child = nest(record(2, 0), &[record(4, 0)]);
+    let parent = nest(record(1, 0), &[child.clone(), record(3, 1)]);
+    let raw = project_with_tasks(empty_section(), section(&[parent, record(5, 1)]));
     let moved = apply(&raw, &movement(3, Some(1), 1, 0));
-    let expected = project_with_tasks(empty_section(), section(&[nest(record(1, 77), &[record(3, 333), child]), record(5, 555)]));
+    let mut child = child;
+    let end = child.len();
+    child[end - 4..].copy_from_slice(&0u32.to_le_bytes());
+    let expected = project_with_tasks(empty_section(), section(&[nest(record(1, 0), &[record(3, 1), child]), record(5, 1)]));
     assert_eq!(moved.bytes, expected);
     assert_eq!(apply(&moved.bytes, &movement(3, Some(1), 0, 1)).bytes, raw);
     let swapped = apply(&raw, &movement(5, None, 1, 0));
@@ -85,6 +91,48 @@ fn source_parent_position_range_and_cancellation_are_guarded() {
     }
     let unsupported = serde_json::json!({"task_guid":id(2),"expected_parent_guid":null,"expected_sibling_index":1,"parent_guid":id(1),"sibling_index":0});
     assert!(serde_json::from_value::<Move>(unsupported).is_err());
+}
+
+#[test]
+fn lookup_uses_guid_storage_bytes_and_refuses_invalid_vectors_even_for_noop() {
+    let mut a = record(1, 1);
+    let mut b = record(2, 0);
+    // Printed GUID order differs from the lexicographic order of its stored bytes.
+    a[12..16].copy_from_slice(&0x00000100u32.to_le_bytes());
+    b[12..16].copy_from_slice(&0x00000001u32.to_le_bytes());
+    // a's stored prefix starts 00, b's starts 01: lookup must be [0, 1].
+    let invalid = project_with_tasks(empty_section(), section(&[a.clone(), b.clone()]));
+    let hash = writer::hash(&invalid, &mut |_| true).unwrap();
+    assert!(matches!(outline(&invalid, &hash, |_| true).unwrap().reason, Some(ScopeReason::InvalidSiblingLookup)));
+    let guid = tasks(&payload(&invalid), &mut |_| true).unwrap()[0].guid.clone();
+    let request = Move { task_guid: guid, expected_parent_guid: None, expected_sibling_index: 0, sibling_index: 0 };
+    assert!(candidate(&invalid, &hash, &request, |_| true).is_err());
+    let end = a.len();
+    a[end - 4..].copy_from_slice(&0u32.to_le_bytes());
+    let end = b.len();
+    b[end - 4..].copy_from_slice(&1u32.to_le_bytes());
+    let valid = project_with_tasks(empty_section(), section(&[a, b]));
+    let hash = writer::hash(&valid, &mut |_| true).unwrap();
+    assert!(outline(&valid, &hash, |_| true).unwrap().reason.is_none());
+    assert_eq!(candidate(&valid, &hash, &request, |_| true).unwrap().bytes, valid);
+}
+
+#[test]
+fn sequential_moves_keep_every_guid_lookup_correct_from_nonidentity_order() {
+    let mut raw = fixture();
+    for request in [movement(3, None, 2, 0), movement(1, None, 1, 2), movement(2, None, 1, 0), movement(3, None, 1, 2)] {
+        raw = apply(&raw, &request).bytes;
+        let data = payload(&raw);
+        let rows = tasks(&data, &mut |_| true).unwrap();
+        // Independent lookup: follow each serialized index and require ascending raw GUIDs.
+        let mut reached = Vec::new();
+        for row in &rows {
+            let index = u32_at(&data, row.offset + row.bytes - 4).unwrap() as usize;
+            let target = rows.get(index).unwrap();
+            reached.push(data[target.offset + 12..target.offset + 28].to_vec());
+        }
+        assert_eq!(reached, vec![vec![1; 16], vec![2; 16], vec![3; 16]]);
+    }
 }
 
 #[test]
@@ -116,7 +164,7 @@ fn refuses_linked_tasks_and_valid_sources_exceeding_the_task_budget() {
 
 #[test]
 fn outline_reports_complete_parent_positions_and_shared_admission() {
-    let raw = project_with_tasks(empty_section(), section(&[nest(record(1, 77), &[nest(record(2, 12), &[record(4, 99)]), record(3, 333)]), record(5, 555)]));
+    let raw = project_with_tasks(empty_section(), section(&[nest(record(1, 0), &[nest(record(2, 0), &[record(4, 0)]), record(3, 1)]), record(5, 1)]));
     let hash = writer::hash(&raw, &mut |_| true).unwrap();
     let result = outline(&raw, &hash, |_| true).unwrap();
     assert!(result.reason.is_none());

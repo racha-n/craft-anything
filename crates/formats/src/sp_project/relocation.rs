@@ -28,6 +28,9 @@ pub struct Receipt {
     pub sections: Vec<writer::SectionGuard>,
     pub internal_reparse_passed: bool,
     pub task_subtree_bytes_preserved: bool,
+    pub task_content_bytes_preserved: bool,
+    pub sibling_lookup_index_validated: bool,
+    pub sibling_lookup_index_rebuilt: bool,
     pub native_reopen_verified: bool,
     pub derived_schedule_recalculated: bool,
     pub limitations: Vec<&'static str>,
@@ -43,6 +46,7 @@ pub enum ScopeReason {
     NoTasks,
     TaskLimit,
     AssociatedOrProgressedTasks,
+    InvalidSiblingLookup,
 }
 impl ScopeReason {
     pub fn message(self) -> &'static str {
@@ -50,6 +54,7 @@ impl ScopeReason {
             Self::NoTasks => "No tasks are available for reordering.",
             Self::TaskLimit => "Task order candidates support at most 512 tasks.",
             Self::AssociatedOrProgressedTasks => "Task ordering requires Planned tasks without assignments, links, costs, progress, codes or user values.",
+            Self::InvalidSiblingLookup => "Task sibling lookup indices are inconsistent; use a valid source project.",
         }
     }
 }
@@ -95,11 +100,49 @@ fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> 
     }
     Ok((hash, container(raw, callback)?))
 }
+// The collection interleaves each task body with one entry of its GUID-sorted
+// lookup vector. An entry belongs to its collection slot, not to that task.
+fn lookup_indices(data: &[u8], siblings: &[&Task]) -> Result<Vec<u32>> {
+    let mut keys = Vec::new();
+    for (index, task) in siblings.iter().enumerate() {
+        let key = bytes(data, checked_add(task.offset, 12)?, 16)?;
+        keys.push((key, u32::try_from(index).map_err(|_| fail("limit", "Sibling lookup index"))?));
+    }
+    keys.sort_by(|a, b| a.0.cmp(b.0));
+    Ok(keys.into_iter().map(|(_, index)| index).collect())
+}
+fn lookup_valid(data: &[u8], siblings: &[&Task]) -> Result<bool> {
+    for (task, index) in siblings.iter().zip(lookup_indices(data, siblings)?) {
+        let end = checked_add(task.offset, task.bytes)?;
+        let at = end.checked_sub(4).ok_or_else(|| fail("truncated", "Sibling lookup word"))?;
+        if bytes(data, at, 4)? != index.to_le_bytes() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn all_lookups_valid(data: &[u8], tasks: &[Task]) -> Result<bool> {
+    let mut groups: BTreeMap<Option<&str>, Vec<&Task>> = BTreeMap::new();
+    for task in tasks {
+        groups.entry(task.parent_guid.as_deref()).or_default().push(task);
+    }
+    for siblings in groups.values() {
+        if !lookup_valid(data, siblings)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 /// Shared admission and complete sibling positions, independent of UI page boundaries.
 pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl FnMut(f32) -> bool) -> std::result::Result<Outline, FormatError> {
     let result = (|| {
         let (hash, container) = source(raw, expected_source_sha256, &mut keep_going)?;
+        let data = container.decoded.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?.clone();
         let evidence = inspect_container(container, hash, false, &mut keep_going)?;
+        let mut reason = scope(&evidence.tasks);
+        if reason.is_none() && !all_lookups_valid(&data, &evidence.tasks)? {
+            reason = Some(ScopeReason::InvalidSiblingLookup);
+        }
         let mut totals = BTreeMap::new();
         for task in &evidence.tasks {
             let total = totals.entry(task.parent_guid.as_deref()).or_insert(0usize);
@@ -115,7 +158,7 @@ pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl Fn
             positions.push(Position { task_guid: task.guid.clone(), parent_guid: task.parent_guid.clone(), sibling_index: *index, sibling_total: total });
             *index = checked_add(*index, 1)?;
         }
-        Ok(Outline { reason: scope(&evidence.tasks), positions })
+        Ok(Outline { reason, positions })
     })();
     result.map_err(format_error)
 }
@@ -136,6 +179,9 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
     let evidence = inspect_container(source, source_hash.clone(), false, callback)?;
     if let Some(reason) = scope(&evidence.tasks) {
         return Err(fail(if matches!(reason, ScopeReason::TaskLimit) { "limit" } else { "unsupported_layout" }, reason.message()));
+    }
+    if !all_lookups_valid(&data, &evidence.tasks)? {
+        return Err(fail("unsupported_layout", ScopeReason::InvalidSiblingLookup.message()));
     }
     let task = writer::task_for(&evidence.tasks, &request.task_guid)?;
     let parent = request.expected_parent_guid.as_deref().map(|id| writer::task_for(&evidence.tasks, id).map(|t| t.guid.clone())).transpose()?;
@@ -162,13 +208,16 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
     let moving = ordered.remove(request.expected_sibling_index);
     ordered.insert(request.sibling_index, moving);
     let expected_order: Vec<String> = ordered.iter().map(|t| t.guid.clone()).collect();
+    let indices = lookup_indices(&data, &ordered)?;
     let mut updated = Vec::new();
     updated.try_reserve_exact(data.len()).map_err(|_| fail("limit", "Task order candidate allocation"))?;
     updated.extend_from_slice(bytes(&data, 0, first)?);
-    for sibling in ordered {
+    for (sibling, index) in ordered.into_iter().zip(indices) {
         check(callback, 0.4)?;
-        // Includes all descendants, unknown fields and the opaque trailing word.
-        updated.extend_from_slice(bytes(&data, sibling.offset, sibling.bytes)?);
+        let body_len = sibling.bytes.checked_sub(4).ok_or_else(|| fail("truncated", "Task body length"))?;
+        // Keep descendants and unknown task fields exact; rebuild this collection's lookup vector.
+        updated.extend_from_slice(bytes(&data, sibling.offset, body_len)?);
+        updated.extend_from_slice(&index.to_le_bytes());
     }
     updated.extend_from_slice(bytes(&data, end, data.len().checked_sub(end).ok_or_else(|| fail("truncated", "Task order tail"))?)?);
     if updated.len() != data.len() {
@@ -178,26 +227,33 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
     let parsed_container = container(&output, callback)?;
     let after_data = parsed_container.decoded.get("Tasks").ok_or_else(|| fail("invalid_output", "Tasks section disappeared"))?.clone();
     let parsed = inspect_container(parsed_container, output_hash.clone(), false, callback)?;
+    if !all_lookups_valid(&after_data, &parsed.tasks)? {
+        return Err(fail("invalid_output", "Reordered sibling lookup indices are inconsistent"));
+    }
     let actual_order: Vec<String> = parsed.tasks.iter().filter(|t| t.parent_guid == parent).map(|t| t.guid.clone()).collect();
     if parsed.tasks.len() != evidence.tasks.len() || actual_order != expected_order {
         return Err(fail("invalid_output", "Reparsed task order differs from the request"));
     }
+    let mut subtree_bytes_preserved = true;
     for original in &evidence.tasks {
         check(callback, 0.9)?;
         let after = writer::task_for(&parsed.tasks, &original.guid)?;
-        // Ancestor bytes legitimately contain reordered descendants. Every moved sibling
-        // subtree must remain exact; all other task identities/parents persist.
+        // Ancestors contain reordered descendants; each moved sibling's body stays exact.
         if after.parent_guid != original.parent_guid {
             return Err(fail("invalid_output", "Task order candidate changed a parent"));
         }
-        if original.parent_guid == parent && bytes(&data, original.offset, original.bytes)? != bytes(&after_data, after.offset, after.bytes)? {
-            return Err(fail("invalid_output", "Task order candidate changed subtree bytes"));
+        if original.parent_guid == parent {
+            let body_len = original.bytes.checked_sub(4).ok_or_else(|| fail("truncated", "Task body length"))?;
+            if original.bytes != after.bytes || bytes(&data, original.offset, body_len)? != bytes(&after_data, after.offset, body_len)? {
+                return Err(fail("invalid_output", "Task order candidate changed task content"));
+            }
+            subtree_bytes_preserved &= bytes(&data, original.offset, original.bytes)? == bytes(&after_data, after.offset, after.bytes)?;
         }
     }
     Ok(Candidate {
         bytes: output,
         receipt: Receipt {
-            version: 1,
+            version: 2,
             source_sha256: source_hash,
             output_sha256: output_hash,
             admitted_build: "6.5.5.28",
@@ -210,12 +266,15 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
             task_count: evidence.tasks.len(),
             sections: guards,
             internal_reparse_passed: true,
-            task_subtree_bytes_preserved: true,
+            task_subtree_bytes_preserved: subtree_bytes_preserved,
+            task_content_bytes_preserved: true,
+            sibling_lookup_index_validated: true,
+            sibling_lookup_index_rebuilt: true,
             native_reopen_verified: false,
             derived_schedule_recalculated: false,
             limitations: vec![
                 "Experimental sibling reordering of existing Planned unassigned tasks only; no reparenting, creation or deletion.",
-                "Complete sibling subtree bytes, including opaque trailing words, are preserved; no schedule or summary recalculation.",
+                "Task content and descendants are preserved; sibling collection GUID lookup indices are rebuilt. No schedule or summary recalculation.",
                 "Other section payloads are preserved, not semantically certified; native open/save/reopen remains a separate gate.",
             ],
         },
