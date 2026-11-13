@@ -284,6 +284,126 @@ fn settle(harness: &mut egui_kittest::Harness<'_, DraftPanel>) {
     }
 }
 #[test]
+fn creation_widget_focus_history_cancel_and_export_follow_the_engine() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = craft_anything_testkit::project_authoring::default_work_project(110);
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let panel = DraftPanel::new(engine, path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    h.get_by_label("Next tasks").click();
+    settle(&mut h);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().offset, 100);
+    h.get_by_label("Create task").click();
+    h.run();
+    h.state_mut().state.labels.name = "Pending original label".into();
+    h.run();
+    h.get_by_label("New task name").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_by_label("New task name").type_text("Cancelled");
+    h.run_steps(2);
+    h.get_by_label("Cancel task creation").click();
+    h.run();
+    assert_eq!(h.state().state.labels.name, "Pending original label");
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().revision, 0);
+    let original = h.state().state.snapshot.as_ref().unwrap().tasks[0].name.clone();
+    h.state_mut().state.labels.name = original;
+    h.run();
+    let name = "Widget_\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}";
+    for (label, value) in [("New task name", name), ("New task ID", "WORK-1")] {
+        h.get_by_label(label).focus();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        h.get_by_label(label).type_text(value);
+        h.run_steps(2);
+    }
+    h.get_by_label("Create one-day task above").click();
+    settle(&mut h);
+    let created = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(created.revision, 1);
+    assert_eq!(created.offset, 100);
+    assert_eq!(h.state().state.selected, 0);
+    assert_eq!(created.tasks[0].name, name);
+    let guid = created.tasks[0].guid.clone();
+    assert_eq!(created.tasks[0].duration_storage_scalar, 28_800);
+    h.get_by_label("Undo").scroll_to_me();
+    h.run();
+    h.get_by_label("Undo").click();
+    settle(&mut h);
+    assert!(!h.state().state.snapshot.as_ref().unwrap().dirty);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().redo_creation_task_guid.as_deref(), Some(guid.as_str()));
+    h.get_by_label("Redo").click();
+    settle(&mut h);
+    let redone = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(redone.offset, 100);
+    assert_eq!(redone.tasks[h.state().state.selected].guid, guid);
+    h.get_by_label("Task labels").click();
+    h.run();
+    h.state_mut().state.labels.name = format!("{name}_Edited");
+    h.run();
+    h.get_by_label("Apply to draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Apply to draft").click();
+    settle(&mut h);
+    let output = dir.path().join("created.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
+    h.get_by_label("I will validate this experimental candidate in the native application.").click();
+    h.run();
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (label, planning) in [("creation-widget-studio.png", false), ("creation-widget-planning.png", true)] {
+            h.state_mut().state.planning = planning;
+            h.run();
+            h.get_by_label("Create task").scroll_to_me();
+            h.run();
+            let image = folder.join(label);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+        }
+    }
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 5);
+    assert_eq!(receipt["stages"][0]["kind"], "create");
+    assert_eq!(receipt["stages"][1]["kind"], "fields");
+    assert_eq!(receipt["stages"][0]["receipt"]["insertion"]["task_guid"], guid);
+    let metadata = craft_anything_formats::sp_project::parse_metadata(&std::fs::read(output).unwrap(), |_| true).unwrap();
+    assert_eq!(metadata.metadata["tasks"][100]["name"], format!("{name}_Edited"));
+    assert_eq!(std::fs::read(path).unwrap(), raw);
+}
+
+#[test]
+fn creation_snapshot_rejects_stale_hints_and_unresolved_focus() {
+    let mut state = State::default();
+    let source = "a".repeat(64);
+    let mut value = snapshot(1, 0);
+    value.creation_supported = true;
+    value.creation_source_sha256 = "b".repeat(64);
+    value.draft_sha256 = "c".repeat(64);
+    assert!(state.accept(value, &source, None).is_err());
+    let mut value = snapshot(1, 0);
+    value.focused_task_guid = Some("22222222-2222-2222-2222-222222222222".into());
+    assert!(state.accept(value, &source, None).is_err());
+    let mut value = snapshot(1, 0);
+    value.redo_creation_task_guid = Some("22222222-2222-2222-2222-222222222222".into());
+    assert!(state.accept(value, &source, None).is_err());
+    assert!(state.snapshot.is_none());
+}
+#[test]
 fn widget_actions_refresh_shared_revision_and_export_mixed_without_changing_source() {
     use egui_kittest::kittest::Queryable as _;
     let dir = tempfile::tempdir().unwrap();
@@ -384,6 +504,12 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         version: 1,
         draft_id: id,
         source_sha256: "a".repeat(64),
+        draft_sha256: String::new(),
+        focused_task_guid: None,
+        redo_creation_task_guid: None,
+        creation_source_sha256: String::new(),
+        creation_supported: false,
+        creation_suggested_display_id: String::new(),
         revision,
         dirty: revision > 0,
         can_undo: revision > 0,
@@ -400,6 +526,8 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         derived_tasks: DerivedPage { items: vec![] },
         tasks: vec![Task {
             guid: "11111111-1111-1111-1111-111111111111".into(),
+            creation: None,
+            creation_reason: String::new(),
             name: "Task".into(),
             display_id: "ID1".into(),
             parent_guid: None,

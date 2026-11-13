@@ -304,7 +304,7 @@ publish nothing or replace nothing. Both actual geometry CLI files pass native
 Save As/unload/reopen and 410 full General comparisons. Twelve declared phase/cost
 frames, four fresh viewer images and two native row images pass, with 57 protected
 hashes unchanged. The canonical viewer verifier is reused; the desktop is not
-rebuilt. Shared creation draft/UI and generic native Save remain pending.
+rebuilt. Later sections record draft/form integration; generic native Save remains pending.
 See [the version-2 contract](4d5d-completion.md#assigned-root-default-work-candidates-version-2).
 
 ### Creation-aware draft replay (R3.14)
@@ -319,8 +319,24 @@ chronological CLI files pass native Save As/unload/reopen and 492 full General
 comparisons. Eight declared phase/cost/bounds comparisons, two mesh instances/one
 definition, two viewer/two native images and 57 protected source hashes pass. The
 canonical viewer verifier is reused; the desktop is not rebuilt. Shared creation
-forms/hints, generated identities, deletion and generic native Save remain pending.
+forms/hints and generated identities are covered below; deletion and generic Save remain pending.
 See [the draft contract](4d5d-completion.md#chronological-creation-draft-candidates-version-5).
+
+### Shared creation forms (R3.14)
+
+The draft offers codec-backed self-template leaf availability, unique original
+`WORK-n` suggestions, OS-generated separate task/Supply Chain UUIDs, source-bound
+focus and redo-created GUIDs. Bounded creation/cancel forms preserve pending edits
+and share structural/history limits. All fifteen frozen checks pass across
+formats/engine/UI/testkit with 2,793 target tests (25 ignored), including
+24 format/8 engine/14 widget cases. Fresh desktop/CLI/verifier builds, fourteen
+widget and two viewer images pass. The current CLI reproduces five explicit SP
+files and receipt values. Two generated-UUID cases pass 29 MCP calls, twelve
+refusals and two native round trips with 492 General comparisons. Eight declared
+phase/cost/bounds checks retain two mesh instances and one definition; all 57
+protected hashes stay unchanged. Failed native UI selection
+was rejected, then a guarded retry passed. Generic Save/deletion remain pending.
+See [the form contract](4d5d-completion.md#shared-default-work-creation-forms).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

@@ -67,6 +67,13 @@ impl Draft {
     pub fn creates_task(&self, guid: &str) -> bool {
         self.operations().iter().any(|o| matches!(o, replay::Operation::Create(r) if r.task_guid.eq_ignore_ascii_case(guid)))
     }
+    pub fn redo_creation_task_guid(&self) -> Option<&str> {
+        let next = self.versions.get(self.cursor.checked_add(1)?)?;
+        next.replay.iter().find_map(|op| match op {
+            replay::Operation::Create(r) if !self.creates_task(&r.task_guid) => Some(r.task_guid.as_str()),
+            _ => None,
+        })
+    }
     pub fn order_edits(&self) -> &[relocation::Move] {
         self.versions.get(self.cursor).map(|v| v.orders.as_slice()).unwrap_or_default()
     }

@@ -3,9 +3,11 @@ use super::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+mod admission;
 #[cfg(test)]
 #[path = "creation_tests.rs"]
 mod tests;
+pub use admission::{Anchor, Availability, Unavailable, availability};
 
 const PROFILE: &str = "616828033f90c1a0c824a4ced3f41aae005e7f65765e6ca5af791686ad5a7642";
 const DURATION: u64 = 28_800;
@@ -22,7 +24,7 @@ pub struct InsertAbove {
     pub name: String,
     pub display_id: String,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceScope {
     PlannedUnassigned,
@@ -284,55 +286,20 @@ pub fn candidate(
     inner(raw, expected_source_sha256, request, &mut keep_going).map_err(format_error)
 }
 fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn FnMut(f32) -> bool) -> Result<Candidate> {
-    let (source_hash, source) = relocation::source(raw, expected, callback)?;
     let task_id = raw_guid(&request.task_guid)?;
     let supply_id = raw_guid(&request.supply_chain_id)?;
     if task_id == supply_id {
         return Err(fail("invalid_identity", "Task and Supply Chain identities must be distinct"));
     }
-    absent(raw, &task_id, &supply_id, callback)?;
-    for data in source.decoded.values() {
-        absent(data, &task_id, &supply_id, callback)?;
-    }
-    let (state, state_data) = planned_state(raw, &source, callback)?;
-    let retained_bytes = source.decoded.values().try_fold(state_data.len(), |total, data| checked_add(total, data.len()))?;
-    if retained_bytes > TOTAL_LIMIT {
-        return Err(fail("limit", "Constructor retained sections exceed the 64 MiB budget"));
-    }
-    absent(&state_data, &task_id, &supply_id, callback)?;
-    let data = source.decoded.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?.clone();
-    let calendars = source.decoded.get("Calendars").ok_or_else(|| fail("missing_dependency", "Calendars section missing"))?.clone();
-    let evidence = inspect_container(source, source_hash.clone(), false, callback)?;
-    if evidence.tasks.is_empty() {
-        return Err(fail("unsupported_layout", "Choose a source with an existing Work leaf"));
-    }
-    if evidence.tasks.len() >= 512 {
-        return Err(fail("limit", "Task insertion supports at most 512 output tasks"));
-    }
-    let source_scope = scope(&evidence.tasks)?;
-    if !relocation::all_lookups_valid(&data, &evidence.tasks, callback)? {
-        return Err(fail("unsupported_layout", "Source collection lookups are inconsistent"));
-    }
-    hierarchy::hints(&data, &evidence.tasks, callback)?;
-    source_supply_identities(&data, &evidence.tasks, callback)?;
+    let prepared = admission::prepare(raw, expected, Some((&task_id, &supply_id)), callback)?;
+    let source_hash = prepared.source_hash.clone();
+    let source_scope = prepared.source_scope;
+    let data = &prepared.data;
+    let evidence = &prepared.evidence;
+    let state = &prepared.state;
     let template = writer::task_for(&evidence.tasks, &request.template_task_guid)?;
     let anchor = writer::task_for(&evidence.tasks, &request.anchor_task_guid)?;
-    profile(&data, template, &evidence.tasks, callback)?;
-    profile(&data, anchor, &evidence.tasks, callback)?;
-    for task in [template, anchor] {
-        if guid_at(&data, checked_add(task.display_id_end, 9)?)? != state {
-            return Err(fail("missing_dependency", "Default Work body does not reference the observed Planned task-state definition"));
-        }
-    }
-    if source_scope == SourceScope::FlatPlannedSingleAssignments {
-        for task in &evidence.tasks {
-            profile(&data, task, &evidence.tasks, callback)?;
-            if task.calendar_guid_storage != template.calendar_guid_storage || guid_at(&data, checked_add(task.display_id_end, 9)?)? != state {
-                return Err(fail("unsupported_layout", "Assigned roots must share the admitted default calendar and Planned state definition"));
-            }
-        }
-    }
-    calendar(&calendars, template, anchor)?;
+    prepared.admit_pair(template, anchor, callback)?;
     let parent = request.expected_parent_guid.as_deref().map(|id| writer::task_for(&evidence.tasks, id).map(|t| t.guid.clone())).transpose()?;
     if anchor.parent_guid != parent {
         return Err(fail("stale_source", "Expected anchor parent differs from source"));
@@ -355,33 +322,33 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     let name = task_strings::encode(&request.name)?;
     let display = task_strings::encode(&request.display_id)?;
     let mut row = Vec::new();
-    append(&mut row, bytes(&data, template.offset, 12)?)?;
+    append(&mut row, bytes(data, template.offset, 12)?)?;
     append(&mut row, &task_id)?;
-    append(&mut row, bytes(&data, checked_add(template.offset, 28)?, 5)?)?;
+    append(&mut row, bytes(data, checked_add(template.offset, 28)?, 5)?)?;
     append(&mut row, &[0; 4])?;
     let assignment_bytes = template.assignments.len().checked_mul(235).ok_or_else(|| fail("limit", "Template assignment bytes"))?;
     let assignment_end = checked_add(checked_add(template.offset, 37)?, assignment_bytes)?;
-    append(&mut row, bytes(&data, assignment_end, 36)?)?;
+    append(&mut row, bytes(data, assignment_end, 36)?)?;
     append(&mut row, &name)?;
     append(&mut row, &anchor.planned_start_wallclock_scalar.to_le_bytes())?;
     append(&mut row, &DURATION.to_le_bytes())?;
-    append(&mut row, bytes(&data, checked_add(template.name_end, 16)?, 82)?)?;
+    append(&mut row, bytes(data, checked_add(template.name_end, 16)?, 82)?)?;
     append(&mut row, &supply_id)?;
-    append(&mut row, bytes(&data, checked_add(template.name_end, 114)?, 82)?)?;
+    append(&mut row, bytes(data, checked_add(template.name_end, 114)?, 82)?)?;
     append(&mut row, &display)?;
     let template_end = checked_add(template.offset, template.bytes)?;
     append(
         &mut row,
-        bytes(&data, template.display_id_end, template_end.checked_sub(template.display_id_end).ok_or_else(|| fail("truncated", "Template tail"))?)?,
+        bytes(data, template.display_id_end, template_end.checked_sub(template.display_id_end).ok_or_else(|| fail("truncated", "Template tail"))?)?,
     )?;
     let count_at = if let Some(parent) = parent.as_deref() { checked_add(writer::task_for(&evidence.tasks, parent)?.name_end, 21)? } else { 28 };
-    if u32_at(&data, count_at)? != u32::try_from(siblings.len()).map_err(|_| fail("limit", "Sibling count"))? {
+    if u32_at(data, count_at)? != u32::try_from(siblings.len()).map_err(|_| fail("limit", "Sibling count"))? {
         return Err(fail("unsupported_layout", "Containing collection count differs from its outline"));
     }
     let mut updated = Vec::new();
-    append(&mut updated, bytes(&data, 0, anchor.offset)?)?;
+    append(&mut updated, bytes(data, 0, anchor.offset)?)?;
     append(&mut updated, &row)?;
-    append(&mut updated, bytes(&data, anchor.offset, data.len().checked_sub(anchor.offset).ok_or_else(|| fail("truncated", "Insertion offset"))?)?)?;
+    append(&mut updated, bytes(data, anchor.offset, data.len().checked_sub(anchor.offset).ok_or_else(|| fail("truncated", "Insertion offset"))?)?)?;
     let total = u32::try_from(checked_add(siblings.len(), 1)?).map_err(|_| fail("limit", "Sibling count"))?;
     updated.get_mut(count_at..checked_add(count_at, 4)?).ok_or_else(|| fail("truncated", "Collection count write"))?.copy_from_slice(&total.to_le_bytes());
     let after = tasks(&updated, callback)?;
@@ -402,7 +369,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     if new.len() != checked_add(evidence.tasks.len(), 1)? || !relocation::all_lookups_valid(&updated, &new, callback)? {
         return Err(fail("invalid_output", "Inserted task count or lookup verification failed"));
     }
-    hierarchy::verify_retained_bodies(&data, &evidence.tasks, &updated, &new, callback)?;
+    hierarchy::verify_retained_bodies(data, &evidence.tasks, &updated, &new, callback)?;
     let id = guid_at(&task_id, 0)?;
     let inserted = writer::task_for(&new, &id)?;
     if inserted.parent_guid != parent
@@ -411,7 +378,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
         || inserted.duration_storage_scalar != DURATION
         || inserted.calendar_guid_storage != template.calendar_guid_storage
         || !inserted.assignments.is_empty()
-        || guid_at(&updated, checked_add(inserted.display_id_end, 9)?)? != state
+        || guid_at(&updated, checked_add(inserted.display_id_end, 9)?)? != *state
         || inserted.planned_start_wallclock_scalar != anchor.planned_start_wallclock_scalar
         || bytes(&updated, checked_add(inserted.name_end, 98)?, 16)? != supply_id
     {
@@ -424,7 +391,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     if !new.iter().map(|t| t.guid.as_str()).eq(expected_order) {
         return Err(fail("invalid_output", "Task preorder changed outside the insertion"));
     }
-    let (output, output_hash, guards) = writer::pack_tasks(raw, &updated, &evidence, true, callback)?;
+    let (output, output_hash, guards) = writer::pack_tasks(raw, &updated, evidence, true, callback)?;
     Ok(Candidate {
         bytes: output,
         receipt: Receipt {

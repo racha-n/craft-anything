@@ -63,6 +63,16 @@ enum Request {
         revision: u64,
         insertion: creation::InsertAbove,
     },
+    CreateDefaultWork {
+        draft_id: u64,
+        expected_source_sha256: String,
+        revision: u64,
+        anchor_task_guid: String,
+        expected_parent_guid: Option<String>,
+        expected_sibling_index: usize,
+        name: String,
+        display_id: String,
+    },
     Undo {
         draft_id: u64,
         expected_source_sha256: String,
@@ -96,7 +106,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound draft, apply guarded fields/order/hierarchy or default Work insertion with atomic bounded history, undo/redo and separate candidate export. Creation-aware exports retain chronological version-5 stages; earlier exports keep their versions. At most eight total insertions/relocations; native saving and general rescheduling remain separate gates.",
+        "Open a source-bound draft, inspect shared creation availability and apply guarded fields/order/hierarchy or default Work insertion with generated or explicit identities. Retain atomic bounded history, focused undo/redo and separate chronological version-5 exports; legacy drafts keep their versions. At most eight total insertions/relocations; native saving and general rescheduling remain separate gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -131,6 +141,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
                 Request::Inspect { draft_id, expected_source_sha256, revision, .. }
                 | Request::Apply { draft_id, expected_source_sha256, revision, .. }
                 | Request::InsertAbove { draft_id, expected_source_sha256, revision, .. }
+                | Request::CreateDefaultWork { draft_id, expected_source_sha256, revision, .. }
                 | Request::Undo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Redo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Close { draft_id, expected_source_sha256, revision, .. }
@@ -170,6 +181,20 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             focus = focus_task_guid;
         }
         Request::InsertAbove { revision, insertion, .. } => {
+            session.draft.insert_above(revision, &insertion, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            focus = Some(insertion.task_guid);
+        }
+        Request::CreateDefaultWork { revision, anchor_task_guid, expected_parent_guid, expected_sibling_index, name, display_id, .. } => {
+            let insertion = creation::InsertAbove {
+                template_task_guid: anchor_task_guid.clone(),
+                anchor_task_guid,
+                expected_parent_guid,
+                expected_sibling_index,
+                task_guid: fresh_task_identity()?,
+                supply_chain_id: fresh_task_identity()?,
+                name,
+                display_id,
+            };
             session.draft.insert_above(revision, &insertion, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
             focus = Some(insertion.task_guid);
         }
@@ -226,6 +251,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let tasks = imported.metadata.get("tasks").and_then(Value::as_array).ok_or_else(|| ToolError::invalid("Draft task inventory is missing."))?;
+    let focused_task_guid = focus.clone();
     if let Some(id) = focus {
         if id.len() != 36 {
             return Err(ToolError::invalid("Choose a source task GUID for draft focus."));
@@ -241,6 +267,13 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let outline = outline.map_err(|e| format_err(e, "draft task-order admission"))?;
+    let creation = creation::availability(&raw, &imported.source_sha256, |_| !ctx.cancel.is_cancelled());
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let creation = creation.map_err(|e| format_err(e, "draft creation availability"))?;
+    let creation_anchors: std::collections::BTreeMap<_, _> = creation.anchors.iter().map(|a| (a.anchor_task_guid.as_str(), a)).collect();
+    let creation_reasons: std::collections::BTreeMap<_, _> = creation.unavailable.iter().map(|r| (r.task_guid.as_str(), r.reason.as_str())).collect();
     let positions: std::collections::BTreeMap<_, _> = outline.positions.iter().map(|p| (p.task_guid.as_str(), p)).collect();
     let hierarchy_hints: std::collections::BTreeMap<_, _> =
         outline.hierarchy_hints.as_deref().unwrap_or(&[]).iter().map(|h| (h.task_guid.as_str(), h)).collect();
@@ -270,6 +303,8 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             object.insert("sibling_index".into(), json!(position.sibling_index));
             object.insert("sibling_total".into(), json!(position.sibling_total));
             object.insert("parent_label".into(), json!(parent_label(position.parent_guid.as_deref())));
+            object.insert("creation".into(), json!(creation_anchors.get(id)));
+            object.insert("creation_reason".into(), json!(creation_reasons.get(id).copied().or(creation.reason.as_deref()).unwrap_or_default()));
             if let Some(hint) = hierarchy_hints.get(id) {
                 object.insert("indent".into(), json!(hint.indent));
                 object.insert("outdent".into(), json!(hint.outdent));
@@ -285,6 +320,9 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
         "order_edit_count":session.draft.structural_edit_count(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
         "creation_count":session.draft.creation_count(),"candidate_receipt_version":if session.draft.has_creation_edits() {5} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
+        "focused_task_guid":focused_task_guid,"creation_source_sha256":creation.source_sha256,"creation_supported":!creation.anchors.is_empty(),
+        "redo_creation_task_guid":session.draft.redo_creation_task_guid(),
+        "creation_reason":creation.reason.as_deref().unwrap_or_default(),"creation_suggested_display_id":creation.suggested_display_id,
         "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
         "task_collection_lookup":imported.coverage.task_collection_lookup,
         "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
@@ -293,6 +331,24 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     ctx.session.ext.insert(Arc::new(DraftSequence(session.id)));
     ctx.session.ext.insert(Arc::new(session));
     Ok(ToolOutput::Value(result))
+}
+
+fn fresh_task_identity() -> Result<String, ToolError> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|e| {
+        ToolError::invalid(format!("Unable to obtain OS entropy for task identities: {e}"))
+            .with_remediation("Retry after the system random provider is available.")
+    })?;
+    let version = bytes.get_mut(6).ok_or_else(|| ToolError::invalid("Task identity buffer is incomplete."))?;
+    *version = (*version & 0x0f) | 0x40;
+    let variant = bytes.get_mut(8).ok_or_else(|| ToolError::invalid("Task identity buffer is incomplete."))?;
+    *variant = (*variant & 0x3f) | 0x80;
+    let encoded = hex::encode(bytes);
+    [(0, 8), (8, 12), (12, 16), (16, 20), (20, 32)]
+        .into_iter()
+        .map(|(start, end)| encoded.get(start..end).map(str::to_owned).ok_or_else(|| ToolError::invalid("Task identity encoding is incomplete.")))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.join("-"))
 }
 
 fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, acknowledged: bool) -> Result<ToolOutput, ToolError> {
@@ -338,6 +394,80 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn generated_creation_ids_focus_cross_pages_and_remain_stable_only_on_redo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project(110);
+        let initial = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let raw = sp_project::task_strings::candidate(
+            &raw,
+            &initial.source_sha256,
+            &[TextEdit::TaskDisplayId {
+                task_guid: initial.metadata["tasks"][109]["guid"].as_str().unwrap().to_owned(),
+                expected: "ID110".into(),
+                value: "work-1".into(),
+            }],
+            |_| true,
+        )
+        .unwrap()
+        .bytes;
+        std::fs::write(&path, &raw).unwrap();
+        let parsed = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let hash = parsed.source_sha256;
+        let anchor = parsed.metadata["tasks"][100]["guid"].clone();
+        let engine = Engine::new(crate::testing::session());
+        let call = |params| engine.call("formats_project_edit", params, CallOptions::new(Caller::Cli)).map(|v| v.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        assert_eq!(opened["creation_supported"], true);
+        assert_eq!(opened["creation_source_sha256"], hash);
+        assert_eq!(opened["creation_suggested_display_id"], "WORK-2");
+        let req = |action, revision| json!({"action":action,"draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":revision});
+        let mut create = req("create_default_work", 0);
+        create["anchor_task_guid"] = anchor.clone();
+        create["expected_parent_guid"] = Value::Null;
+        create["expected_sibling_index"] = json!(100);
+        create["name"] = json!("New_\u{0e07}\u{0e32}\u{0e19}_\u{6881}");
+        create["display_id"] = json!("WORK-2");
+        let first = call(create.clone()).unwrap();
+        let first_id = first["focused_task_guid"].as_str().unwrap().to_owned();
+        assert_eq!(first["offset"], 100);
+        assert_eq!(first["tasks"][0]["guid"], first_id);
+        assert_eq!(first["creation_suggested_display_id"], "WORK-3");
+        assert_eq!(first_id.as_bytes()[14], b'4');
+        assert!(b"89ab".contains(&first_id.as_bytes()[19]));
+        let mut undo = req("undo", 1);
+        undo["focus_task_guid"] = json!(first_id);
+        let undone = call(undo).unwrap();
+        assert_eq!(undone["dirty"], false);
+        assert!(undone["focused_task_guid"].is_null());
+        assert_eq!(undone["redo_creation_task_guid"], first_id);
+        let mut redo = req("redo", 2);
+        redo["focus_task_guid"] = json!(first_id);
+        let redone = call(redo).unwrap();
+        assert_eq!(redone["draft_sha256"], first["draft_sha256"]);
+        assert_eq!(redone["focused_task_guid"], first_id);
+        call(req("undo", 3)).unwrap();
+        create["revision"] = json!(4);
+        let branch = call(create.clone()).unwrap();
+        let branch_id = branch["focused_task_guid"].as_str().unwrap();
+        assert_ne!(branch_id, first_id);
+        assert_eq!(branch["can_redo"], false);
+        assert!(call(create.clone()).is_err());
+        create["revision"] = json!(5);
+        assert!(call(create).is_err());
+        assert_eq!(call(req("inspect", 5)).unwrap()["draft_sha256"], branch["draft_sha256"]);
+        let output = dir.path().join("created.sp");
+        let mut export = req("write_candidate", 5);
+        export["output_path"] = json!(output);
+        export["acknowledge_storage_only"] = json!(true);
+        let published = call(export).unwrap();
+        assert_eq!(published["receipt"]["version"], 5);
+        let inserted = &published["receipt"]["stages"][0]["receipt"]["insertion"];
+        assert_eq!(inserted["task_guid"], branch_id);
+        assert_ne!(inserted["task_guid"], inserted["supply_chain_id"]);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
     }
     #[test]
     fn rejected_insertion_does_not_replace_the_current_draft_revision() {

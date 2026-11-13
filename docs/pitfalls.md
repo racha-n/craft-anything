@@ -978,6 +978,17 @@ to fail. Freeze and compare the actual working bytes first. Check Git's canonica
 content separately, accounting for checkout line endings; do not rewrite the file
 merely to make an acceptance check pass.
 
+**Double borrows after extracting shared admission.** Turning owned buffers or
+records into borrowed fields leaves old `&data`, `&evidence` or `&snapshot` call
+sites with an unnecessary extra reference. Runtime tests still pass, but strict
+clippy rejects them. Run all-target clippy before freezing a long acceptance run.
+
+**Acknowledged selection is not row identity.** A native UI selection call returned
+success while no task was selected, and a screenshot caught a different foreground
+window. Verify the selected task GUID independently. Let the owned foreground frame
+settle, check ownership again after capture, reject occluded images, and preserve
+failed attempts instead of counting them as native acceptance.
+
 **A process search that found itself.** Looking for a helper by a word in its command line, with
 that word in the search's own command, listed the search: "a helper is left behind" after every
 run, with a new pid each time. The new pid was the clue. Build the pattern from parts

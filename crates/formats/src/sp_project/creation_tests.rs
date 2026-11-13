@@ -267,6 +267,54 @@ fn payload(raw: &[u8]) -> Vec<u8> {
 const MON: u64 = 1_794_214_800;
 const WED: u64 = 1_794_387_600;
 
+#[test]
+fn creation_availability_uses_writer_guards_and_original_unique_display_suggestions() {
+    let raw = project(&[record(0x11, MON, DURATION), record(0x22, MON + 3600, DURATION), record(0x33, MON, DURATION)]);
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let report = availability(&raw, &hash, |_| true).unwrap();
+    assert_eq!(report.source_sha256, hash);
+    assert_eq!(report.anchors.len(), 2);
+    assert_eq!(report.unavailable.len(), 1);
+    assert_eq!(report.unavailable[0].task_guid, id(0x22));
+    assert_eq!(report.suggested_display_id, "WORK-1");
+    for anchor in report.anchors {
+        let mut r = request(0x11, None, 0);
+        r.template_task_guid = anchor.template_task_guid;
+        r.anchor_task_guid = anchor.anchor_task_guid;
+        r.expected_parent_guid = anchor.expected_parent_guid;
+        r.expected_sibling_index = anchor.expected_sibling_index;
+        r.display_id = report.suggested_display_id.clone();
+        assert!(candidate(&raw, &hash, &r, |_| true).is_ok());
+    }
+    let mut r = request(0x11, None, 0);
+    r.display_id = "work-1".into();
+    let with_id = apply(&project(&[record(0x11, MON, DURATION)]), &r).bytes;
+    let hash = writer::hash(&with_id, &mut |_| true).unwrap();
+    assert_eq!(availability(&with_id, &hash, |_| true).unwrap().suggested_display_id, "WORK-2");
+    assert!(availability(&with_id, &"0".repeat(64), |_| true).is_err());
+    assert!(availability(&with_id, &hash, |_| false).is_err());
+}
+
+#[test]
+fn creation_availability_distinguishes_summary_rows_and_global_assigned_refusals() {
+    let raw = project(&[nested(record(0x44, MON, DURATION), &[record(0x11, MON, DURATION), record(0x22, MON, DURATION)])]);
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let report = availability(&raw, &hash, |_| true).unwrap();
+    assert_eq!(report.anchors.len(), 2);
+    assert_eq!(report.unavailable[0].task_guid, id(0x44));
+    assert_eq!(report.anchors[1].expected_parent_guid, Some(id(0x44)));
+    assert_eq!(report.anchors[1].expected_sibling_index, 1);
+    let raw = assigned_project(&[assigned_record(0x11, MON, 86_400, 1)]);
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let report = availability(&raw, &hash, |_| true).unwrap();
+    assert_eq!(report.source_scope, Some(SourceScope::FlatPlannedSingleAssignments));
+    assert_eq!(report.anchors.len(), 1);
+    let raw = assigned_project(&[assigned_record(0x11, MON, 86_400, 2)]);
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let report = availability(&raw, &hash, |_| true).unwrap();
+    assert!(report.anchors.is_empty() && report.reason.is_some() && report.source_scope.is_none());
+}
+
 #[cfg(test)]
 mod draft_replay {
     use super::*;

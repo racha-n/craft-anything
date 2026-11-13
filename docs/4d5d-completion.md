@@ -813,5 +813,52 @@ sections; native transaction/presentation updates remain separate. Eight declare
 phase/cost/bounds comparisons, two mesh instances/one definition, two fresh viewer
 images and two native images pass; all 57 protected hashes remain unchanged. The
 canonical viewer verifier is reused, and the desktop is not rebuilt for this
-headless change. Shared creation forms, generated identities, read-only creation
-availability, deletion and generic native Save remain pending.
+headless change. The following section records shared creation forms, generated
+identities and read-only availability. Deletion and generic native Save remain pending.
+
+## Shared default Work creation forms
+
+Creation candidates and read-only availability now share source, collection lookup,
+Supply Chain identity, default-body, Planned-definition and calendar admission.
+Availability reports self-template Work leaf anchors with their source hash,
+expected parent and sibling position. Summary rows and unsupported starts carry
+refusal reasons. Assigned-root validation remains global and flat, and the report
+does not imply broader task cloning or scheduling support. A `WORK-n` suggestion
+checks every source display ID with the existing ASCII-insensitive uniqueness rule;
+it does not emulate native automatic IDs.
+
+The shared draft adds `create_default_work`, accepting the guarded anchor,
+name and display ID. The engine obtains separate UUID v4 task/Supply Chain identities
+from the OS random provider, fails on an entropy error and retains the accepted
+identities in the draft recipe. Explicit `insert_above` remains available for
+reproducible callers. New snapshot fields bind creation hints to the current draft
+hash, expose focused/redo-created task GUIDs, and attach availability to each paged
+row. The UI selects the returned GUID; redo can focus the task restored by its
+specific history transaction rather than guessing from a row number.
+
+The bounded form creates an unassigned one-day task above the selected row. It
+discloses its inherited start/calendar, blocks creation while other field/order
+proposals are pending, and shares the eight-operation structural limit. Cancel
+resets only local creation inputs. All IO and replay remain engine/background work;
+the source file and source-scene caches remain separate from the draft preview.
+
+Twenty-four creation/availability format, eight engine and fourteen widget
+regressions pass. All fifteen frozen checks pass with 2,793 all-target tests
+(25 ignored) across formats/engine/UI/testkit, strict clippy, layers, locks,
+staged secrets, tools, wasm, doctests and formatting. Desktop, CLI and canonical
+GPU verifier are rebuilt from this source freeze. Fourteen widget QA images and
+two fresh viewer layouts were inspected, including selected GUIDs across paging,
+local creation cancel, source-cache isolation and existing order/hierarchy controls.
+
+The current CLI reproduces all five accepted explicit v2 SP files and receipt JSON
+values exactly. Two generated-UUID cases pass 29 persistent MCP calls, twelve atomic
+refusals, v5 schema/recursive hash chains and byte-stable GUID-preserving undo/redo.
+Both generated-ID CLI files pass native Save As/unload/reopen and 492 full General
+comparisons against controls, with only the explicit GUID/name/ID fields changed.
+Task section bytes remain exact through the native round trip. Each CLI candidate
+preserves all 47 non-Tasks source sections; native transaction/presentation updates
+remain separate. Eight declared phase/cost/bounds comparisons retain the original
+2-instance/1-definition geometry; all 57 protected hashes remain unchanged. Native
+selection/capture failures were rejected and retained; the guarded retry supplies
+the accepted evidence. Generic native Save, broader construction and deletion
+remain unadmitted.

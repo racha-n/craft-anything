@@ -24,6 +24,7 @@ pub mod managed;
 pub mod packed;
 pub mod pcap;
 pub mod program_facts;
+pub mod project_authoring;
 pub mod sbpf;
 pub mod sectionless;
 pub mod sqlite;
