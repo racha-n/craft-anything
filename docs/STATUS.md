@@ -1,10 +1,25 @@
 # Status
 
 What works today and how it was checked. The plan, owners and order of work are in
-[ROADMAP.md](ROADMAP.md). Last updated 2026-11-13. The baseline audit on 2026-10-23 from `main` had 923 tests passing;
+[ROADMAP.md](ROADMAP.md). Last updated 2026-11-14. The baseline audit on 2026-10-23 from `main` had 923 tests passing;
 workspace clippy, layers, fmt and the secret scan of all history were clean. Chinese UI checks are listed separately below.
 
 ## What works, and how it was checked
+
+### Controlled relationship scheduling evidence (R3.14)
+
+Eight isolated native controls cover SS/FF/SF and FS lag -1d with an explicitly
+entered Gregorian Data Date. Four controls establish stability at already-correct
+dates; three deliberately perturbed two-task controls and an active three-task SF
+control demonstrate date propagation. Nine native Save/unload/reopen sequences
+include the native-created FS-to-SF input graph. Post-calculation and reopened
+General snapshots match in 697 field comparisons; eleven images were inspected.
+The SF control finishes its successor at Tuesday 17:00 before its predecessor
+starts Wednesday 09:00, with zero working time between those calendar boundaries.
+Source task/link identities, all 57 protected inputs and 844 validated source/schema
+hashes remain unchanged. This study changes no production code: runtime preview
+remains declared FS/nonnegative-lag only, and general native rescheduling stays
+unadmitted. See [the controls and their limits](sp-relationship-scheduling-controls.md).
 
 ### Explicit completed-row export (R3.14)
 

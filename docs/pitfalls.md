@@ -1,5 +1,17 @@
 # Pitfalls
 
+**A scheduler input already satisfied the relationship.** Save/reopen stability
+did not demonstrate date propagation. Inspect initial dates before spending a
+native run; use deliberately later starts and unequal durations, and exercise an
+active SF bound with a preceding FS chain. Keep unchanged-input controls separate.
+Zero working lag across a finish/start boundary can span a nonworking night;
+compare working boundaries rather than forcing equal displayed-clock timestamps.
+
+**A nearby eighty-byte span was not the complete link record.** Locate and validate
+the record marker or parsed link offset before comparing its full identity/body.
+The observed type and lag windows are at record offsets 44 and 48. An adjacent
+window can omit marker/identity bytes; a separate full-record audit is required.
+
 **A new primary task GUID did not reproduce the native constructor.** A bounded
 clone differed from the independent default task in a separate 16-byte Supply Chain
 identity. Regenerate both identities, check source identity collisions and validate

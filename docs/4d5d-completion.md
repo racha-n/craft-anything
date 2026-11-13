@@ -295,6 +295,21 @@ changed only the successor's stored planned start. This validates the explicit-a
 fixture subset, not the cause of the localized default mismatch or other scheduling
 policies, task kinds, constraints, hierarchies or critical paths.
 
+Subsequent [relationship scheduling controls](sp-relationship-scheduling-controls.md)
+separate four already-correct stability inputs from three unequal-duration,
+deliberately displaced two-task inputs and one active three-task SF graph created
+through native UI. All eight calculation controls retain their values through
+native Save/unload/reopen, with 697 General field-preservation comparisons. SS,
+FF and FS lag -1d move the successor from November 20 to the independently
+expected November 9 or 10. The active SF chain pulls the root back to the explicit
+anchor's first working day, places its FS successor on November 11 and finishes
+the SF successor on November 10 at 17:00. Its predecessor starts November 11 at
+09:00; those instants have a sixteen-hour displayed-clock gap and zero working
+time between them. A finish constraint therefore cannot use raw timestamp
+equality as a substitute for working-boundary semantics. These observations
+cover the exception-free default Project Calendar only. Runtime preview support,
+general native rescheduling and broader source-policy admission are unchanged.
+
 ## Declared FS earliest-date preview
 
 `formats_project_schedule_preview` is read-only. It requires source SHA-256, an explicit
