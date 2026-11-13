@@ -323,3 +323,42 @@ Frozen validation passed all 11 checks: six focused regressions, main/CLI/check-
 builds, 949 analysis/engine target tests (9 ignored), all-target clippy, layers, locks,
 secrets, tools, wasm, doctests and formatting. This adds a declared read-only model;
 the general Plan rescheduling command and native authoring acceptance remain separate.
+
+## Existing-task sibling order candidates
+
+`formats_project_sp_task_order_candidate_write` moves one existing task subtree within
+its current sibling collection. Source SHA-256, task GUID, expected parent GUID (null
+for roots) and expected sibling position are mandatory guards. The destination index
+is measured after removing the moving subtree. No-op candidates retain original file
+bytes. A candidate keeps each sibling subtree byte-identical, including descendants
+and opaque trailing words, reparses parent/order identity, and preserves all 47 other
+section payloads. The version-1 receipt has a separate schema and keeps native-reopen
+and derived-schedule flags false. Publication uses new candidate/receipt paths only.
+
+The current subset contains at most 512 Planned tasks without assignments, links,
+costs, progress records, activity codes or user values. It does not change parents,
+create/delete tasks, integrate into draft history, recalculate schedules or enable the
+general Plan movement commands. These capabilities remain separate pending changes.
+
+An independent two-root native Up control saved/reopened in reversed order. Its whole
+Tasks payload exactly matched swapping complete task records while preserving their
+trailing words (1 then 0 after the swap). Those words are therefore not current display
+positions. A separate mismatched-date indent/outdent pair kept parent stored dates
+unchanged even though summary dates in the UI followed the child; physical Outdent
+restored the original Tasks payload exactly. Reparenting changed the child's trailing
+word, so no general hierarchy writer is admitted from these controls.
+
+Latest CLI up/restore/no-op cases matched the independent native Tasks controls,
+validated against the version-1 receipt schema and refused output replacement.
+A three-root Up control matched another CLI candidate while preserving all other
+sections. The two-root candidate passed native Save/unload/reopen: its decoded Tasks
+remained exact, and all ten visible ID/name/duration/start/finish grid cells matched
+the independent control. General properties were not rechecked in that round trip;
+the native screenshot was inspected. This certifies those observed cases only, and
+the generic receipt's native-acceptance and recalculation flags remain false.
+
+Frozen validation passed all 11 checks: four focused regressions, main/CLI/check-tool
+builds, 2,485 formats/engine target tests (19 ignored), all-target clippy, layers,
+locks, secrets, tools, wasm, doctests and formatting. Nested synthetic cases preserve
+complete descendant subtrees and opaque tails; stale identity/position, cancellation,
+linked tasks and valid sources exceeding the 512-task budget are refused.

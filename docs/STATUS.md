@@ -76,6 +76,26 @@ the two explicit-anchor native FS/lag 0 and FS/lag 2d controls; both inputs stay
 unchanged. Generic native parity and critical-path flags remain false. General Plan
 rescheduling, native write-back and baselines remain unadmitted.
 
+### Whole-subtree sibling order candidates (R3.14)
+
+A headless candidate tool changes an existing task's position within its current
+sibling collection. Source SHA-256, GUID, parent and source-position guards apply;
+complete subtree bytes and all other stored sections stay unchanged. The current
+subset is at most 512 Planned tasks without assignments, links, costs, progress,
+codes or user values. Parent changes and draft/UI movement integration remain open.
+
+Latest CLI up/restore/no-op controls matched native Tasks, passed the version-1
+receipt schema and refused replacement. A three-root native Up control also matched
+the CLI candidate exactly. The two-root candidate passed native Save/unload/reopen,
+with ID/name/duration/start/finish grid values equal to the independent native control;
+General properties were not rechecked in that round trip. The inspected screenshot
+shows both reordered rows. Generic native-reopen and schedule-recalculation receipt
+flags remain false. General hierarchy editing and native Save are still unadmitted.
+Frozen validation passed all 11 checks: four focused regressions, main/CLI/check-tool
+builds, 2,485 formats/engine target tests (19 ignored), all-target clippy, layers,
+locks, secrets, tools, wasm, doctests and formatting. See
+[the bounded contract](4d5d-completion.md#existing-task-sibling-order-candidates).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

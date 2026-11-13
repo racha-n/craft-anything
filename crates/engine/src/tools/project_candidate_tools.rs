@@ -8,9 +8,9 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
-use craft_anything_formats::sp_project::mixed;
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
+use craft_anything_formats::sp_project::{mixed, relocation};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -46,6 +46,15 @@ struct MixedRequest {
     #[serde(default)]
     text_edits: Vec<TextEdit>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RelocationRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    relocation: relocation::Move,
+}
 pub fn specs() -> Vec<ToolSpec> {
     vec![
         spec(
@@ -80,6 +89,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<MixedRequest>,
             run_mixed,
+        ),
+        spec(
+            "formats_project_sp_task_order_candidate_write",
+            "Write an experimental task order candidate",
+            "Reorder one existing Planned unassigned task subtree within its sibling list in a source-bound project of at most 512 tasks. Guard parent and position, preserve complete subtree bytes and other sections, and publish separate candidate/receipt files without replacement. Does not change parents, recalculate schedules or certify native saving.",
+            "Create a separate test copy with changed task order. Validate it in the source application before relying on it.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<RelocationRequest>,
+            run_relocation,
         ),
     ]
 }
@@ -177,6 +197,40 @@ fn run_text(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     Ok(ToolOutput::evidence(evidence))
 }
 
+fn run_relocation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: RelocationRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = relocation::candidate(&input.bytes, &p.expected_source_sha256, &p.relocation, |progress| {
+        ctx.report(Some(progress), "Preparing experimental task relocation candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted task relocation candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_task_order_candidate_write", input.subject, params)
+        .summary("Prepared an experimental task relocation candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new(
+            "native_persistence_unverified",
+            "Internal reparse and subtree preservation passed; native acceptance and schedule coordination remain unverified.",
+        ))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 pub(super) fn run_mixed(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: MixedRequest = parse_params(params.clone())?;
     if !p.acknowledge_storage_only {
@@ -215,6 +269,22 @@ pub(super) fn run_mixed(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, 
 mod tests {
     use super::*;
     use crate::{CallOptions, Caller, Engine};
+    #[test]
+    fn task_relocation_requires_acknowledgement_and_valid_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("relocated.sp");
+        let engine = Engine::new(crate::testing::session());
+        let mut request = json!({"path":dir.path().join("absent.sp"),"expected_source_sha256":"0".repeat(64),
+            "output_path":output,"acknowledge_storage_only":false,
+            "relocation":{"task_guid":"11111111-1111-1111-1111-111111111111","expected_parent_guid":null,
+                "expected_sibling_index":0,"sibling_index":0}});
+        let call = |params| engine.call("formats_project_sp_task_order_candidate_write", params, CallOptions::new(Caller::Cli));
+        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+        request["acknowledge_storage_only"] = json!(true);
+        assert!(call(request).is_err());
+        assert!(!output.exists());
+        assert!(!output.with_extension("sp.receipt.json").exists());
+    }
     #[test]
     fn candidate_tool_requires_storage_acknowledgement_and_valid_source() {
         let dir = tempfile::tempdir().unwrap();

@@ -4,6 +4,7 @@ mod actual_expenses;
 mod definitions;
 pub mod draft;
 pub mod mixed;
+pub mod relocation;
 mod resource_tree;
 mod scene_geometry;
 mod scene_graph;
@@ -991,7 +992,7 @@ mod tests {
         b
     }
 
-    fn empty_section() -> Vec<u8> {
+    pub(super) fn empty_section() -> Vec<u8> {
         let mut b = vec![0; 24];
         b.extend(OPEN);
         b.extend(0u32.to_le_bytes());
@@ -1001,7 +1002,7 @@ mod tests {
     fn project(geometry: Vec<u8>) -> Vec<u8> {
         project_with_tasks(geometry, empty_section())
     }
-    fn project_with_tasks(geometry: Vec<u8>, task_data: Vec<u8>) -> Vec<u8> {
+    pub(super) fn project_with_tasks(geometry: Vec<u8>, task_data: Vec<u8>) -> Vec<u8> {
         project_with_definitions(geometry, task_data, empty_section(), empty_section())
     }
     fn project_with_definitions(geometry: Vec<u8>, task_data: Vec<u8>, resources: Vec<u8>, profiles: Vec<u8>) -> Vec<u8> {
@@ -1046,7 +1047,7 @@ mod tests {
         }
         b
     }
-    fn metadata_task_section(missing_predecessor: bool) -> Vec<u8> {
+    pub(super) fn metadata_task_section(missing_predecessor: bool) -> Vec<u8> {
         let mut task = vec![0; 29];
         task[..4].copy_from_slice(&[0x76, 0x25, 0xec, 0x04]);
         task[12..28].fill(0x11);
