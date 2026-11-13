@@ -74,25 +74,17 @@ impl Draft {
     }
     pub fn undo_deletion_task_guid(&self) -> Option<&str> {
         let previous = self.versions.get(self.cursor.checked_sub(1)?)?;
-        self.operations().iter().find_map(|op| match op {
-            replay::Operation::Delete(r)
-                if !previous.replay.iter().any(|o| matches!(o,replay::Operation::Delete(p) if p.task_guid.eq_ignore_ascii_case(&r.task_guid))) =>
-            {
-                Some(r.task_guid.as_str())
-            }
+        match self.operations().last()? {
+            replay::Operation::Delete(r) if previous.replay.len().checked_add(1)? == self.operations().len() => Some(r.task_guid.as_str()),
             _ => None,
-        })
+        }
     }
     pub fn redo_deletion(&self) -> Option<&super::deletion::DeleteLeaf> {
         let next = self.versions.get(self.cursor.checked_add(1)?)?;
-        next.replay.iter().find_map(|op| match op {
-            replay::Operation::Delete(r)
-                if !self.operations().iter().any(|o| matches!(o,replay::Operation::Delete(p) if p.task_guid.eq_ignore_ascii_case(&r.task_guid))) =>
-            {
-                Some(r)
-            }
+        match next.replay.last()? {
+            replay::Operation::Delete(r) if self.operations().len().checked_add(1)? == next.replay.len() => Some(r),
             _ => None,
-        })
+        }
     }
     pub fn structural_edit_count(&self) -> usize {
         self.structural_edits().len().saturating_add(self.replay_counts().1)
@@ -101,14 +93,35 @@ impl Draft {
         self.operations().iter().filter(|o| matches!(o, replay::Operation::Create(_))).count()
     }
     pub fn creates_task(&self, guid: &str) -> bool {
-        self.operations().iter().any(|o| matches!(o, replay::Operation::Create(r) if r.task_guid.eq_ignore_ascii_case(guid)))
+        replay::identities(self.operations()).iter().any(|r| r.task_guid.eq_ignore_ascii_case(guid))
     }
     pub fn redo_creation_task_guid(&self) -> Option<&str> {
         let next = self.versions.get(self.cursor.checked_add(1)?)?;
-        next.replay.iter().find_map(|op| match op {
-            replay::Operation::Create(r) if !self.creates_task(&r.task_guid) => Some(r.task_guid.as_str()),
+        match next.replay.last()? {
+            replay::Operation::Create(r) if self.operations().len().checked_add(1)? == next.replay.len() => Some(r.task_guid.as_str()),
             _ => None,
-        })
+        }
+    }
+    pub fn authored_receipt_version(&self) -> u32 {
+        replay::receipt_version(self.operations())
+    }
+    /// The engine supplies the current materialized bytes; hints retain that hash.
+    pub fn deletion_availability(&self, raw: &[u8], expected: &str, mut keep: impl FnMut(f32) -> bool) -> Result<super::deletion::LayoutAvailability, String> {
+        let completed = super::deletion::row_completion::inner(raw, expected, &replay::identities(self.operations()), &mut keep);
+        let mut available = match completed {
+            Ok(Some(c)) => super::deletion::layout_availability(&c.bytes, &c.receipt.output_sha256, &mut keep).map_err(error)?,
+            Ok(None) => super::deletion::layout_availability(raw, expected, &mut keep).map_err(error)?,
+            Err(e) if e.code == "cancelled" || e.code == "stale_source" => return Err(error(super::format_error(e))),
+            Err(e) => super::deletion::LayoutAvailability {
+                version: 1,
+                source_sha256: expected.to_ascii_lowercase(),
+                anchors: Vec::new(),
+                reason: Some(e.message),
+                reference_scan_required: true,
+            },
+        };
+        available.source_sha256 = expected.to_ascii_lowercase();
+        Ok(available)
     }
     pub fn order_edits(&self) -> &[relocation::Move] {
         self.versions.get(self.cursor).map(|v| v.orders.as_slice()).unwrap_or_default()
@@ -155,7 +168,11 @@ impl Draft {
     fn require_legacy_export(&self) -> Result<(), String> {
         if self.has_authored_edits() {
             return Err(if self.has_deletion_edits() {
-                "This draft deletes tasks; export its version-6 chronological candidate"
+                if self.authored_receipt_version() == 7 {
+                    "This draft deletes after creation; export its version-7 chronological candidate"
+                } else {
+                    "This draft deletes tasks; export its version-6 chronological candidate"
+                }
             } else {
                 "This draft creates tasks; export its version-5 chronological candidate"
             }
@@ -309,9 +326,6 @@ impl Draft {
         self.apply_replay(revision, &[], &[], &[], Some(Authored::Insert(request)), &mut keep)
     }
     pub fn delete_leaf(&mut self, revision: u64, request: &super::deletion::DeleteLeaf, mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
-        if self.has_creation_edits() {
-            return Err("Deletion after unsaved creation needs separate presentation-state admission".into());
-        }
         self.apply_replay(revision, &[], &[], &[], Some(Authored::Delete(request)), &mut keep)
     }
     fn apply_replay(
@@ -339,7 +353,12 @@ impl Draft {
         if let Some(Authored::Insert(request)) = authored {
             super::creation::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
         } else if let Some(Authored::Delete(request)) = authored {
-            super::deletion::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
+            let completed = replay::completion(&current, &parsed.source_sha256, self.operations(), &mut *keep).map_err(error)?;
+            if let Some(c) = completed {
+                super::deletion::candidate(&c.bytes, &c.receipt.output_sha256, request, &mut *keep).map_err(error)?;
+            } else {
+                super::deletion::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
+            }
         } else {
             validate(&current, &parsed.source_sha256, scalars, texts, relocations, keep)?;
         }

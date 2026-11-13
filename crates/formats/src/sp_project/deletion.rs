@@ -3,6 +3,7 @@ use super::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 mod presentation;
+pub mod row_completion;
 #[cfg(test)]
 #[path = "deletion_tests.rs"]
 mod tests;

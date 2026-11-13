@@ -373,6 +373,96 @@ fn deletion_widget_pages_cancel_undo_redo_and_export_follow_the_engine() {
 }
 
 #[test]
+fn created_then_deleted_widget_keeps_guid_focus_and_exports_v7_without_source_changes() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(110, Some(100));
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let panel = DraftPanel::new(engine, path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    h.get_by_label("Next tasks").click();
+    settle(&mut h);
+    let neighbor = h.state().state.snapshot.as_ref().unwrap().tasks[0].guid.clone();
+    h.get_by_label("Create task").scroll_to_me();
+    h.run();
+    h.get_by_label("Create task").click();
+    h.run();
+    h.get_by_label("Create one-day task above").scroll_to_me();
+    h.run();
+    h.get_by_label("Create one-day task above").click();
+    settle(&mut h);
+    let created = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(created.task_total, 111);
+    assert_eq!(created.offset, 100);
+    let guid = created.tasks[h.state().state.selected].guid.clone();
+    assert!(created.tasks[h.state().state.selected].deletion.is_some());
+    h.get_by_label("Delete task").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete task").click();
+    h.run();
+    h.get_by_label("Delete from draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete from draft").click();
+    settle(&mut h);
+    let deleted = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(deleted.task_total, 110);
+    assert_eq!(deleted.offset, 100);
+    assert_eq!(deleted.tasks[h.state().state.selected].guid, neighbor);
+    h.get_by_label("Undo").scroll_to_me();
+    h.run();
+    h.get_by_label("Undo").click();
+    settle(&mut h);
+    let restored = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(restored.offset, 100);
+    assert_eq!(restored.tasks[h.state().state.selected].guid, guid);
+    h.get_by_label("Delete task").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete task").click();
+    h.run();
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (label, planning) in [("creation-deletion-widget-studio.png", false), ("creation-deletion-widget-planning.png", true)] {
+            h.state_mut().state.planning = planning;
+            h.run();
+            h.get_by_label("Delete from draft").scroll_to_me();
+            h.run();
+            let image = folder.join(label);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+        }
+    }
+    h.get_by_label("Redo").scroll_to_me();
+    h.run();
+    h.get_by_label("Redo").click();
+    settle(&mut h);
+    let current = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(current.task_total, 110);
+    assert_eq!(current.tasks[h.state().state.selected].guid, neighbor);
+    let output = dir.path().join("created-deleted.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
+    h.get_by_label("I will validate this experimental candidate in the native application.").click();
+    h.run();
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 7);
+    assert_eq!(receipt["stages"][0]["kind"], "create");
+    assert_eq!(receipt["stages"][1]["kind"], "presentation_rows");
+    assert_eq!(receipt["stages"][2]["kind"], "delete");
+    assert_eq!(std::fs::read(path).unwrap(), raw);
+}
+
+#[test]
 fn deletion_snapshot_rejects_stale_layout_guards_and_invalid_undo_cues() {
     let source = "a".repeat(64);
     let mut good = snapshot(1, 0);

@@ -14,6 +14,9 @@ pub(super) fn validate_source(data: &[u8], tasks: &[Task], callback: &mut dyn Fn
     validate(data, tasks, callback).map(|_| ())
 }
 fn validate(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<Layout> {
+    validate_without(data, tasks, &BTreeSet::new(), callback)
+}
+fn validate_without(data: &[u8], tasks: &[Task], missing: &BTreeSet<&str>, callback: &mut dyn FnMut(f32) -> bool) -> Result<Layout> {
     if data.len() > STREAM_LIMIT {
         return Err(fail("limit", "PresentationData exceeds 16 MiB"));
     }
@@ -31,12 +34,16 @@ fn validate(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) 
             marker(data, 44, SELECT_END)?;
             let guid = guid_at(&id, 0)?;
             let _ = writer::task_for(tasks, &guid)?;
+            if missing.contains(guid.as_str()) {
+                return Err(fail("unsupported_layout", "A missing created row cannot be the saved selection"));
+            }
             Some(id)
         }
         _ => return Err(fail("unsupported_layout", "Deletion admits at most one selected task")),
     };
     let mut identities: Vec<Vec<u8>> = tasks
         .iter()
+        .filter(|t| !missing.contains(t.guid.as_str()))
         .map(|t| {
             // Raw storage order is also the presentation row-map key order.
             let text = t.guid.replace('-', "");
@@ -95,6 +102,87 @@ fn validate(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) 
     }
     let (map, entries) = matched.ok_or_else(|| fail("unsupported_layout", "No complete admitted task presentation row map"))?;
     Ok(Layout { map, selected, entries })
+}
+
+/// Complete only rows absent for validated preceding creation identities.
+pub(super) fn complete_created(
+    data: &[u8],
+    tasks: &[Task],
+    known: &[(String, Vec<u8>)],
+    callback: &mut dyn FnMut(f32) -> bool,
+) -> Result<Option<(Vec<u8>, Vec<String>)>> {
+    if known.len() > ordered::ORDER_LIMIT || data.len() > STREAM_LIMIT {
+        return Err(fail("limit", "Created presentation row budget exceeded"));
+    }
+    let mut absent = Vec::new();
+    for (guid, raw) in known {
+        if raw.len() != 16 {
+            return Err(fail("invalid_identity", "Created row identity length"));
+        }
+        let mut prefix = raw.clone();
+        prefix.extend_from_slice(ROW);
+        let mut found = false;
+        for at in (0..data.len()).step_by(65_536) {
+            check(callback, 0.35)?;
+            let length = data.len().saturating_sub(at).min(65_559);
+            if bytes(data, at, length)?.windows(prefix.len()).any(|part| part == prefix) {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            absent.push((guid.as_str(), raw.as_slice()));
+        }
+    }
+    let missing = absent.iter().map(|(guid, _)| *guid).collect::<BTreeSet<_>>();
+    let layout = validate_without(data, tasks, &missing, callback)?;
+    if absent.is_empty() {
+        return Ok(None);
+    }
+    let extra = absent.len().checked_mul(35).ok_or_else(|| fail("limit", "Created row length"))?;
+    let length = checked_add(data.len(), extra)?;
+    if length > STREAM_LIMIT {
+        return Err(fail("limit", "Completed presentation exceeds 16 MiB"));
+    }
+    let mut rows = Vec::new();
+    for (_, at) in &layout.entries {
+        rows.push(bytes(data, *at, 35)?.to_vec());
+    }
+    absent.sort_by(|a, b| a.1.cmp(b.1));
+    for (_, raw) in &absent {
+        let mut row = raw.to_vec();
+        row.extend_from_slice(ROW);
+        // Observed unchanged with and without explicit task selection; semantics stay opaque.
+        row.extend_from_slice(&[1, 1, 0, 0, 0, 1, 1]);
+        row.extend_from_slice(ROW_END);
+        rows.push(row);
+    }
+    rows.sort();
+    if rows.len() != tasks.len() {
+        return Err(fail("invalid_output", "Completed task row count differs from the inventory"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(length).map_err(|_| fail("limit", "Presentation completion allocation"))?;
+    output.extend_from_slice(bytes(data, 0, checked_add(layout.map, 8)?)?);
+    output.extend_from_slice(&u32::try_from(rows.len()).map_err(|_| fail("limit", "Completed row count"))?.to_le_bytes());
+    for row in rows {
+        check(callback, 0.45)?;
+        output.extend_from_slice(&row);
+    }
+    let old_rows = layout.entries.len().checked_mul(35).ok_or_else(|| fail("limit", "Original row length"))?;
+    let tail = checked_add(checked_add(layout.map, 12)?, old_rows)?;
+    output.extend_from_slice(bytes(data, tail, data.len().checked_sub(tail).ok_or_else(|| fail("truncated", "Presentation tail"))?)?);
+    let final_layout = validate(&output, tasks, callback)?;
+    if output.len() != length || final_layout.selected != layout.selected {
+        return Err(fail("invalid_output", "Presentation completion changed selection or length"));
+    }
+    for (id, at) in &layout.entries {
+        let new = final_layout.entries.iter().find(|(key, _)| key == id).ok_or_else(|| fail("invalid_output", "Retained row disappeared"))?.1;
+        if bytes(data, *at, 35)? != bytes(&output, new, 35)? {
+            return Err(fail("invalid_output", "Presentation completion changed an existing row"));
+        }
+    }
+    Ok(Some((output, absent.into_iter().map(|(guid, _)| guid.to_owned()).collect())))
 }
 
 pub(super) fn remove(data: &[u8], before: &[Task], after: &[Task], primary: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<(Vec<u8>, bool)> {

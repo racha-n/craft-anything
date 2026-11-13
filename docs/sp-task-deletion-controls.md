@@ -154,12 +154,37 @@ pre-creation bytes. Native deletion also changes ProjectStateIndex,
 LastTransactionID and Thumbnail; those changes are not reproduced or admitted as
 native transaction-history equivalence.
 
-These four new native round trips establish a bounded row-state prerequisite,
-not an enabled production composition. Production source and all receipt schemas
-remain unchanged. A separate implementation must bind any row completion to the
+These four native study round trips establish a bounded row-state prerequisite.
+The study changed no production source or receipt schemas. A separate implementation
+must bind any row completion to the
 actual preceding creation recipes and current bytes, preserve all existing rows,
 retain the authoritative deletion reference/body/lookup guards and use a new typed
 receipt contract. Earlier creation stages must keep their historical bytes rather
 than changing retroactively when a later deletion is requested. Deletion after
-unsaved creation remains disabled until that implementation passes independent
-candidate, history, UI and native acceptance. Generic deletion remains unadmitted.
+unsaved creation remained disabled at the study checkpoint. The following contract
+records subsequent candidate/history/UI/native acceptance. Generic deletion remains unadmitted.
+
+## Provenance-bound completion candidate contract
+
+Authored version 7 adds a `presentation_rows` stage immediately before an admitted
+post-creation deletion when required. Its version-1 receipt binds to the preceding
+output and names the added Task/Supply Chain pairs. Replay derives those pairs from
+actual earlier creation stages and removes them when deleted; no tool parameter
+allows a caller to assert provenance. Body identities, complete remaining map,
+source hash, single/empty saved selection, unknown identity references and all
+existing deletion guards remain authoritative. The observed seven row bytes stay
+opaque. Completion changes only PresentationData; the other 47 stored sections,
+existing rows, selection and other decoded presentation bytes remain exact.
+
+Creation-only v5 and earlier chronological v6 outputs remain unchanged. A completion
+stage does not rewrite previous creation bytes. One history transaction contains
+completion plus deletion, with stable undo/redo and GUID focus. Row completion is
+not a public bypass for unknown original rows. Generic child/summary/assigned/link
+deletion, native transaction-history updates and generic Save remain separate.
+
+Six prior v5 and four v6 SP/receipt pairs remain identical. Four new v7 CLI files
+pass 71 MCP calls/28 refusals, schemas/provenance/hash chains, native Save As/unload/
+reopen and 1,148 General comparisons with exact Tasks through native saving. The
+fifteen frozen checks, rebuilt desktop/CLI/viewer, eighteen widget/two viewer/four
+native inspected images and unchanged protected57 hashes are recorded in
+[the current completion status](4d5d-completion.md#guarded-deletion-after-task-creation-r314).

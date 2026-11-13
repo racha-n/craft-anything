@@ -385,10 +385,11 @@ removed GUID and Redo selects the neighbor again across paged inventories. The
 deletion form preserves pending edits on local cancel and calls the same engine
 tool used by CLI/MCP. Export remains a separate experimental candidate.
 
-Receipts containing deletion use version 6 and retain typed per-stage hash chains.
+Chronological deletion without post-creation completion retains version 6 and typed
+per-stage hash chains.
 Creation-only version-5 exports and earlier schemas remain unchanged. Creation
-after admitted deletion is covered; deletion after unsaved creation remains
-unavailable because creation does not construct native presentation rows.
+after admitted deletion is covered. Later sections record guarded row completion
+for deletion after unsaved creation.
 
 All fifteen frozen checks pass with 2,808 all-target tests
 (25 ignored), including ten deletion format, ten draft
@@ -402,8 +403,8 @@ by generated-identity creation with undo/redo. Both pass native Save As, unload 
 reopen with 574 General comparisons and exact Task section bytes. This evidence is
 specific to those cases and the admitted native build. Eight declared geometry
 frame comparisons retain two instances and one definition; all 57 protected source
-hashes remain unchanged. Generic deletion, deletion after unsaved creation, native
-transaction-history equivalence, general scheduling and generic Save remain open.
+hashes remain unchanged. Generic deletion, native transaction-history equivalence,
+general scheduling and generic Save remain open; post-creation deletion is covered below.
 
 ### Post-creation presentation study (R3.14)
 
@@ -413,9 +414,46 @@ The row insertion projection matches native PresentationData exactly without a
 visit, and differs only by selection after a visit. Both deletions retain General
 values in 328 comparisons and preserve surviving task bodies with exact count/
 lookup reconstruction. Two images and 57 protected hashes pass; all 839 validated
-production source/schema files remain unchanged. This is prerequisite evidence;
-post-creation deletion stays disabled pending provenance-bound row completion and
-candidate/history/UI/native acceptance. See [the study](sp-task-deletion-controls.md#presentation-rows-after-unsaved-creation).
+production source/schema files remained unchanged during that study. The following
+section records provenance-bound completion and candidate/history/UI/native acceptance. See [the study](sp-task-deletion-controls.md#presentation-rows-after-unsaved-creation).
+
+### Guarded deletion after task creation (R3.14)
+
+The shared draft can delete an admitted created or existing root leaf after task
+creation. Immediately before deletion it completes only missing presentation rows
+whose Task/Supply Chain pairs come from preceding creation recipes. It validates
+those pairs against current task bodies and refuses missing original rows,
+unknown references, ambiguous maps and unsupported source layouts. All existing
+rows, saved selection and other presentation bytes remain exact during completion;
+the following standalone deletion stage retains its own full reference/body/
+lookup/selection guards. The composition is limited to the existing unassigned
+Planned flat-root subset and shared structural/history/allocation limits.
+
+Completion is an explicit source-bound receipt stage in authored version 7. Earlier
+creation stages retain their original bytes and receipts; their hashes are not
+rewritten retrospectively. Completion and deletion form one undo transaction, and
+redo reconstructs the same identities and bytes. History cues follow transaction
+boundaries even when an explicitly supplied deleted GUID is reused. Availability
+hints inspect completion in temporary memory but bind to the actual draft hash;
+requests cannot supply their own provenance. A fresh draft with an unexplained
+missing original row remains unsupported. Generic deletion and native history/
+scheduling/Save equivalence remain unadmitted.
+
+All fifteen frozen checks pass with 2,816 all-target tests
+(25 ignored), including sixteen deletion/completion
+format, eleven engine and seventeen widget cases. Desktop, CLI and canonical
+viewer were rebuilt. Eighteen widget and two fresh viewer images were inspected;
+eight declared geometry frames retain the previous costs/phases/bounds and two
+instances/one definition. Six legacy v5 and four legacy v6 complete SP/receipt
+pairs remain identical, and all earlier receipt schemas remain unchanged.
+
+Four new v7 cases pass 71 persistent MCP calls and 28 refusals:
+direct creation followed by created/existing-target deletion, and deletion followed
+by creation and either target. Every file passes native Save As, unload and reopen,
+1,148 full General comparisons against native controls and exact Task bytes through
+the round trip. Four native images were inspected; all 57 protected source hashes
+remain unchanged. These are case-specific results for the admitted native build,
+not all-project or general native-transaction certification.
 
 ### Readable CSV dates and reusable templates (R3.14)
 

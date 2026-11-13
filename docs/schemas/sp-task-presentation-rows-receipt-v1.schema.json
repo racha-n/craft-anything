@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Experimental provenance-bound created presentation rows receipt version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "source_sha256",
+    "output_sha256",
+    "admitted_build",
+    "added_rows",
+    "observed_row_opaque_hex",
+    "task_count",
+    "row_count_before",
+    "row_count_after",
+    "sections",
+    "identity_pairs_validated",
+    "internal_reparse_passed",
+    "existing_rows_preserved",
+    "selection_preserved",
+    "other_presentation_bytes_preserved",
+    "native_reopen_verified",
+    "native_transaction_history_reproduced",
+    "limitations"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "output_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "admitted_build": {
+      "const": "6.5.5.28"
+    },
+    "added_rows": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_guid",
+          "supply_chain_id"
+        ],
+        "properties": {
+          "task_guid": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          },
+          "supply_chain_id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          }
+        }
+      }
+    },
+    "observed_row_opaque_hex": {
+      "const": "01010000000101"
+    },
+    "task_count": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 511
+    },
+    "row_count_before": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 510
+    },
+    "row_count_after": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 511
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 48,
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source_stored_sha256",
+          "output_stored_sha256",
+          "stored_bytes_preserved"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source_stored_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "output_stored_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "stored_bytes_preserved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "identity_pairs_validated": {
+      "const": true
+    },
+    "internal_reparse_passed": {
+      "const": true
+    },
+    "existing_rows_preserved": {
+      "const": true
+    },
+    "selection_preserved": {
+      "const": true
+    },
+    "other_presentation_bytes_preserved": {
+      "const": true
+    },
+    "native_reopen_verified": {
+      "const": false
+    },
+    "native_transaction_history_reproduced": {
+      "const": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

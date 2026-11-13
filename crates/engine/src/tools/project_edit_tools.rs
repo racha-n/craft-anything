@@ -112,7 +112,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound draft, inspect source-bound creation/deletion layout hints and apply guarded fields/order/hierarchy, default Work insertion or unassigned root-leaf deletion. Retain atomic bounded history and GUID-focused undo/redo. Deletion exports use version 6, creation-only exports retain version 5 and legacy drafts keep their versions. At most eight insertions/deletions/relocations; per-target reference validation, native saving and general rescheduling remain independent gates.",
+        "Open a source-bound draft, inspect creation/deletion layout hints and apply guarded fields/order/hierarchy, default Work insertion or unassigned root-leaf deletion. Retain bounded atomic history and GUID-focused undo/redo. Post-creation deletion completes only provenance-bound presentation rows and uses version 7; prior deletion/creation exports retain versions 6/5 and legacy drafts keep their versions. At most eight insertions/deletions/relocations; target-reference validation, native saving and general rescheduling remain independent gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -295,15 +295,11 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let creation = creation.map_err(|e| format_err(e, "draft creation availability"))?;
-    let mut deletion =
-        deletion::layout_availability(&raw, &imported.source_sha256, |_| !ctx.cancel.is_cancelled()).map_err(|e| format_err(e, "draft deletion layout"))?;
-    if session.draft.has_creation_edits() {
-        deletion.anchors.clear();
-        deletion.reason = Some("Deletion after unsaved creation needs separate saved-view admission.".into());
-    }
+    let deletion = session.draft.deletion_availability(&raw, &imported.source_sha256, |_| !ctx.cancel.is_cancelled());
     if ctx.cancel.is_cancelled() {
         return Err(ToolError::cancelled());
     }
+    let deletion = deletion.map_err(ToolError::invalid)?;
     let deletion_anchors: std::collections::BTreeMap<_, _> = deletion.anchors.iter().map(|a| (a.task_guid.as_str(), a)).collect();
     let creation_anchors: std::collections::BTreeMap<_, _> = creation.anchors.iter().map(|a| (a.anchor_task_guid.as_str(), a)).collect();
     let creation_reasons: std::collections::BTreeMap<_, _> = creation.unavailable.iter().map(|r| (r.task_guid.as_str(), r.reason.as_str())).collect();
@@ -353,7 +349,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
         "order_edit_count":session.draft.structural_edit_count(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
-        "creation_count":session.draft.creation_count(),"deletion_count":session.draft.deletion_count(),"candidate_receipt_version":if session.draft.has_deletion_edits() {6} else if session.draft.has_creation_edits() {5} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
+        "creation_count":session.draft.creation_count(),"deletion_count":session.draft.deletion_count(),"candidate_receipt_version":if session.draft.has_authored_edits() {session.draft.authored_receipt_version()} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
         "focused_task_guid":focused_task_guid,"creation_source_sha256":creation.source_sha256,"creation_supported":!creation.anchors.is_empty(),
         "redo_creation_task_guid":session.draft.redo_creation_task_guid(),
         "undo_deletion_task_guid":session.draft.undo_deletion_task_guid(),
@@ -435,6 +431,71 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn created_task_deletion_uses_provenance_bound_hints_v7_and_paged_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(110, Some(100));
+        std::fs::write(&path, &raw).unwrap();
+        let hash = sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let engine = Engine::new(crate::testing::session());
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let req = |action, revision| json!({"action":action,"draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":revision});
+        let mut inspect = req("inspect", 0);
+        inspect["offset"] = json!(100);
+        let page = call(inspect).unwrap();
+        let anchor = &page["tasks"][0];
+        let next = anchor["guid"].clone();
+        let mut create = req("create_default_work", 0);
+        create["anchor_task_guid"] = anchor["guid"].clone();
+        create["expected_parent_guid"] = Value::Null;
+        create["expected_sibling_index"] = anchor["sibling_index"].clone();
+        create["name"] = json!("Created_งาน_梁_😀");
+        create["display_id"] = json!("NEW-1");
+        let created = call(create).unwrap();
+        let guid = created["focused_task_guid"].clone();
+        assert_eq!(created["offset"], 100);
+        assert_eq!(created["deletion_layout_supported"], true);
+        assert_eq!(created["deletion_source_sha256"], created["draft_sha256"]);
+        let task = created["tasks"].as_array().unwrap().iter().find(|t| t["guid"] == guid).unwrap();
+        let mut export = req("write_candidate", 1);
+        export["output_path"] = json!(dir.path().join("created.sp"));
+        export["acknowledge_storage_only"] = json!(true);
+        let before = call(export).unwrap()["receipt"]["stages"][0].clone();
+        let mut delete = req("delete_leaf", 1);
+        delete["deletion"] = task["deletion"].clone();
+        let mut forged = delete.clone();
+        forged["created_identities"] = json!([]);
+        assert!(call(forged).is_err());
+        let mut stale = delete.clone();
+        stale["deletion"]["expected_display_id"] = json!("wrong");
+        assert!(call(stale).is_err());
+        assert_eq!(call(req("inspect", 1)).unwrap()["draft_sha256"], created["draft_sha256"]);
+        let deleted = call(delete).unwrap();
+        assert_eq!(deleted["candidate_receipt_version"], 7);
+        assert_eq!(deleted["task_total"], 110);
+        assert_eq!(deleted["focused_task_guid"], next);
+        assert_eq!(deleted["offset"], 100);
+        let undone = call(req("undo", 2)).unwrap();
+        assert_eq!(undone["draft_sha256"], created["draft_sha256"]);
+        assert_eq!(undone["focused_task_guid"], guid);
+        assert_eq!(undone["offset"], 100);
+        let mut redo = req("redo", 3);
+        redo["focus_task_guid"] = guid;
+        let redone = call(redo).unwrap();
+        assert_eq!(redone["draft_sha256"], deleted["draft_sha256"]);
+        assert_eq!(redone["focused_task_guid"], next);
+        let mut export = req("write_candidate", 4);
+        export["output_path"] = json!(dir.path().join("deleted.sp"));
+        export["acknowledge_storage_only"] = json!(true);
+        let receipt = call(export).unwrap()["receipt"].clone();
+        assert_eq!(receipt["version"], 7);
+        assert_eq!(receipt["stages"][0], before);
+        assert_eq!(receipt["stages"][1]["kind"], "presentation_rows");
+        assert_eq!(receipt["stages"][1]["receipt"]["source_sha256"], created["draft_sha256"]);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
     }
     #[test]
     fn deletion_draft_focus_undo_redo_and_v6_export_stay_source_bound() {

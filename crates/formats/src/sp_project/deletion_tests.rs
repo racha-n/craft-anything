@@ -254,7 +254,7 @@ fn deletion_field_order_stages_retain_chronology_and_hash_chain() {
 }
 
 #[test]
-fn deletion_history_limits_last_root_and_unsaved_creation_remain_guarded() {
+fn deletion_history_limits_last_root_and_post_creation_completion_remain_guarded() {
     use crate::sp_project::draft::Draft;
     let raw = source(10, None);
     let hash = writer::hash(&raw, &mut |_| true).unwrap();
@@ -300,8 +300,11 @@ fn deletion_history_limits_last_root_and_unsaved_creation_remain_guarded() {
     .unwrap();
     let current = d.bytes(|_| true).unwrap();
     let (_, req) = request(&current, 0);
-    assert!(d.delete_leaf(2, &req, |_| true).is_err());
-    assert_eq!(d.revision, 2);
-    assert_eq!(d.bytes(|_| true).unwrap(), current);
     assert_eq!(d.authored_candidate(|_| true).unwrap().receipt.version, 6);
+    assert!(candidate(&current, &inspect(&current, |_| true).unwrap().source_sha256, &req, |_| true).is_err());
+    d.delete_leaf(2, &req, |_| true).unwrap();
+    assert_eq!(d.revision, 3);
+    assert_eq!(d.authored_candidate(|_| true).unwrap().receipt.version, 7);
+    d.undo(3).unwrap();
+    assert_eq!(d.bytes(|_| true).unwrap(), current);
 }
