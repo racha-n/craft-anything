@@ -862,3 +862,12 @@ remain separate. Eight declared phase/cost/bounds comparisons retain the origina
 selection/capture failures were rejected and retained; the guarded retry supplies
 the accepted evidence. Generic native Save, broader construction and deletion
 remain unadmitted.
+
+## Independent task deletion controls
+
+Five independent native save/unload/reopen controls now establish initial leaf
+removal, presentation/selection and incoming-link cleanup boundaries. Removing an
+assigned task retains its resource and geometry but also clears the removed
+assignment's selected identity. A Tasks-only deletion is insufficient. No production
+deletion codec is admitted yet; [the control report](sp-task-deletion-controls.md)
+defines the proposed first subset and the unverified cases.

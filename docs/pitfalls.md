@@ -989,6 +989,14 @@ window. Verify the selected task GUID independently. Let the owned foreground fr
 settle, check ownership again after capture, reject occluded images, and preserve
 failed attempts instead of counting them as native acceptance.
 
+**Task deletion reaches outside the task collection.** Native controls retain task
+GUIDs in presentation row state and focus/selection packets. Assigned deletion also
+clears an assignment identity, which is distinct from its appearance profile. A
+successful task reparse cannot certify cleanup. Audit references across sections,
+validate presentation changes independently, and test incoming links in surviving
+tasks. Selecting a target before deletion can itself change a multi-selection
+source; do not attribute that whole presentation delta solely to deletion.
+
 **A process search that found itself.** Looking for a helper by a word in its command line, with
 that word in the search's own command, listed the search: "a helper is left behind" after every
 run, with a new pid each time. The new pid was the clue. Build the pattern from parts

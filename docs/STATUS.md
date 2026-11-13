@@ -338,6 +338,18 @@ protected hashes stay unchanged. Failed native UI selection
 was rejected, then a guarded retry passed. Generic Save/deletion remain pending.
 See [the form contract](4d5d-completion.md#shared-default-work-creation-forms).
 
+### Independent deletion controls (R3.14)
+
+Five native deletion controls pass save/unload/reopen and valid lookup inspection:
+root leaf, child leaf, assigned geometry root and each direction of a link.
+Tasks removal/count/lookup projections match four controls; deleting a predecessor
+also removes the surviving successor's link. Presentation projections match three
+single-selection controls, including cleanup of the removed assignment identity.
+Multiple selection remains unadmitted. Geometry retains two mesh instances and
+one definition after assignment deletion. Five native images are inspected and
+all 57 protected hashes stay unchanged. No production deletion codec or UI exists
+yet. See [the evidence and candidate boundary](sp-task-deletion-controls.md).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,
