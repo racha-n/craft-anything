@@ -122,8 +122,14 @@ the independent control before/after, and the unchanged task matched its baselin
 Candidate/receipt bytes and all 57 protected sources remained unchanged. General
 hierarchy editing and native Save remain unadmitted. See
 [the contract](4d5d-completion.md#shared-field-and-task-order-drafts).
-The main application's metadata-only schedule/cost workflow still needs its own
-source-bound draft entry point; the existing application entry requires a loaded SP scene.
+The metadata-only workflow now has an entry that binds its own ready
+path/hash to the same draft tool. It works without a scene and preserves a retained
+viewport/cache; nine targeted widget regressions and both metadata-entry screenshots
+passed inspection. An active draft cannot be replaced by a different source or revision.
+All ten frozen checks passed, including main/CLI builds, 242 UI tests (six ignored),
+clippy, layers, locks, secrets, tools, doctests and formatting. The full UI suite ran
+serially after an unrelated chat smoke selector missed once in the parallel run;
+that exact smoke test also passed on retry. The initial miss remains unexplained.
 
 ### Readable CSV dates and reusable templates (R3.14)
 

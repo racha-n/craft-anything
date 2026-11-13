@@ -728,11 +728,12 @@ impl SceneApp {
     fn show_contents(&mut self, ui: &mut egui::Ui) {
         if self.metadata.is_some() {
             let back = ui.button("Back to 3D viewer").clicked();
-            if let Some(panel) = &mut self.metadata {
-                panel.show(ui);
-            }
+            let draft = self.metadata.as_mut().and_then(|panel| panel.show(ui));
             if back {
                 self.metadata = None;
+            } else if let Some(source) = draft {
+                self.open_draft_from(source);
+                ui.ctx().request_repaint();
             }
             return;
         }

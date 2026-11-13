@@ -1,4 +1,5 @@
 //! Metadata-only schedule and cost client; all source reads run through engine tools.
+use super::draft_panel::DraftSource;
 use super::project_panel::{self, Mode, State};
 use crate::jobs::Jobs;
 use craft_anything_engine::{
@@ -274,14 +275,34 @@ impl MetadataPanel {
         }
         ui.small("Choose a new folder name. Reports use the displayed source hash and focus; geometry is not inspected. A folder without manifest.json is incomplete.");
     }
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn draft_source(&self) -> Option<DraftSource> {
+        if self.pending || self.jobs.busy() || self.error.is_some() {
+            return None;
+        }
+        let latest = self.latest.as_ref()?;
+        if self.source_sha256.as_deref() != Some(latest.source_sha256.as_str()) {
+            return None;
+        }
+        Some(DraftSource { path: self.path.clone(), source_sha256: latest.source_sha256.clone() })
+    }
+    pub(super) fn show(&mut self, ui: &mut egui::Ui) -> Option<DraftSource> {
         self.jobs.set_repaint(ui.ctx());
         self.poll();
+        let mut draft = None;
         ui.heading("Schedule and costs only");
         ui.label("Geometry is not inspected. This view has no 3D model.");
         ui.label(&self.path);
         if let Some(sha) = &self.source_sha256 {
             ui.small(format!("Source SHA-256: {sha}"));
+        }
+        let source = self.draft_source();
+        if ui
+            .add_enabled(source.is_some(), egui::Button::new("Project draft"))
+            .on_hover_text("Edit this source in an isolated draft and export a separate candidate.")
+            .clicked()
+        {
+            self.state.playing = false;
+            draft = source;
         }
         self.reports(ui);
         let key = self.key();
@@ -331,6 +352,7 @@ impl MetadataPanel {
             ui.small(format!("Selected source task GUID: {guid}"));
         }
         self.evaluate();
+        draft
     }
 }
 impl Drop for MetadataPanel {

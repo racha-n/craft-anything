@@ -64,6 +64,137 @@ fn metadata_fixture_count(count: u8) -> Vec<u8> {
     }
     raw
 }
+
+fn retained_scene(path: &std::path::Path, hash: &str) -> Arc<craft_anything_engine::tools::scene_tools::LoadedScene> {
+    use craft_anything_formats::scene_bundle::{Scene, math::Bounds};
+    Arc::new(craft_anything_engine::tools::scene_tools::LoadedScene {
+        manifest: path.to_owned(),
+        subject: serde_json::from_value(json!({"kind":"project","sha256":hash,"name":"retained.sp"})).unwrap(),
+        metadata: Arc::new(json!({"retained":true})),
+        scene: Arc::new(Scene {
+            id: "retained".into(),
+            source_sha256: hash.into(),
+            unit_declaration: "unresolved".into(),
+            axis_declaration: "unresolved".into(),
+            mesh_uvs: Default::default(),
+            mesh_textures: Default::default(),
+            texture_assets: None,
+            source_colors: Default::default(),
+            object_colors: Default::default(),
+            resources: vec![],
+            resource_instance_counts: vec![],
+            meshes: vec![],
+            instances: vec![],
+            positions: vec![],
+            gpu_positions: vec![],
+            gpu_indices: vec![],
+            bounds: Bounds([[0.; 3], [1.; 3]]),
+            render_origin: [0.; 3],
+            triangles: 0,
+            node_count: 0,
+        }),
+    })
+}
+
+#[test]
+fn metadata_entry_uses_its_ready_source_with_or_without_a_retained_scene() {
+    use egui_kittest::kittest::Queryable as _;
+    for keep_scene in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("retained.sp");
+        let meta_path = dir.path().join("metadata.sp");
+        let old_raw = metadata_fixture_count(1);
+        let meta_raw = metadata_fixture_count(3);
+        std::fs::write(&old_path, &old_raw).unwrap();
+        std::fs::write(&meta_path, &meta_raw).unwrap();
+        let old_hash = craft_anything_formats::sp_project::parse_metadata(&old_raw, |_| true).unwrap().source_sha256;
+        let meta_hash = craft_anything_formats::sp_project::parse_metadata(&meta_raw, |_| true).unwrap().source_sha256;
+        let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+        let retained = retained_scene(&old_path, &old_hash);
+        let mut app = SceneApp::with_engine(engine.clone(), None, old_path.to_string_lossy().into_owned());
+        app.initial_open = false;
+        if keep_scene {
+            app.model = Some(retained.clone());
+            engine.session().ext.insert(retained.clone());
+        }
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if keep_scene {
+            let worker = release.clone();
+            app.jobs.spawn("Retained viewport work", true, move |job| {
+                let started = std::time::Instant::now();
+                while !worker.load(std::sync::atomic::Ordering::SeqCst) && !job.cancel.is_cancelled() && started.elapsed() < std::time::Duration::from_secs(3) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err("Retained viewport test job".into())
+            });
+        }
+        app.metadata = Some(super::super::metadata_panel::MetadataPanel::new(engine.clone(), meta_path.to_string_lossy().into_owned()));
+        assert!(app.metadata.as_ref().unwrap().draft_source().is_none());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200., 1000.)).build_ui_state(|ui, app: &mut SceneApp| app.show(ui), app);
+        crate::theme::install_fonts(&h.ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while h.state().metadata.as_ref().unwrap().draft_source().is_none() {
+            h.step();
+            assert!(std::time::Instant::now() < deadline, "metadata did not become ready");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run();
+        if keep_scene {
+            assert!(h.state().jobs.busy());
+        }
+        h.get_by_label("Project draft").click();
+        h.run_steps(2);
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        while h.state().draft.as_ref().is_none_or(|d| d.state.snapshot.is_none() || d.jobs.busy()) {
+            h.step();
+            assert!(std::time::Instant::now() < deadline, "draft did not open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run();
+        let panel = h.state().draft.as_ref().unwrap();
+        assert_eq!(panel.source_path, meta_path.to_string_lossy());
+        assert_eq!(panel.source_hash, meta_hash);
+        assert_eq!(panel.state.snapshot.as_ref().unwrap().task_total, 3);
+        assert_eq!(h.state().model.is_some(), keep_scene);
+        if keep_scene {
+            assert!(Arc::ptr_eq(h.state().model.as_ref().unwrap(), &retained));
+            assert!(Arc::ptr_eq(&engine.session().ext.get::<craft_anything_engine::tools::scene_tools::LoadedScene>().unwrap(), &retained));
+        }
+        assert_eq!(std::fs::read(&old_path).unwrap(), old_raw);
+        assert_eq!(std::fs::read(&meta_path).unwrap(), meta_raw);
+        if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+            let name = if keep_scene { "metadata-draft-retained.png" } else { "metadata-draft-no-scene.png" };
+            let target = std::path::PathBuf::from(folder).join(name);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            assert!(!target.exists());
+            h.render().unwrap().save(target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn opening_another_source_preserves_an_active_draft_and_unapplied_forms() {
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let mut app = SceneApp::with_engine(engine, None, String::new());
+    let source = DraftSource { path: "first.sp".into(), source_sha256: "a".repeat(64) };
+    app.open_draft_from(source.clone());
+    app.draft.as_mut().unwrap().state.labels.name = "Unapplied".into();
+    app.open_draft_from(source);
+    assert_eq!(app.draft.as_ref().unwrap().state.labels.name, "Unapplied");
+    app.open_draft_from(DraftSource { path: "second.sp".into(), source_sha256: "b".repeat(64) });
+    let original = app.draft.as_ref().unwrap();
+    assert_eq!(original.source_path, "first.sp");
+    assert_eq!(original.state.labels.name, "Unapplied");
+    assert!(original.state.show);
+    app.open_draft_from(DraftSource { path: "first.sp".into(), source_sha256: "b".repeat(64) });
+    assert_eq!(app.draft.as_ref().unwrap().source_hash, "a".repeat(64));
+    let original = app.draft.as_mut().unwrap();
+    original.state.open_requested = false;
+    original.state.show = false;
+    app.open_draft_from(DraftSource { path: "second.sp".into(), source_sha256: "b".repeat(64) });
+    assert_eq!(app.draft.as_ref().unwrap().source_path, "second.sp");
+    assert_eq!(app.draft.as_ref().unwrap().state.labels.name, "");
+}
 fn settle(harness: &mut egui_kittest::Harness<'_, DraftPanel>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {

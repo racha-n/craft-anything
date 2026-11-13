@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+#[derive(Clone)]
+pub(super) struct DraftSource {
+    pub path: String,
+    pub source_sha256: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Assignment {
     resource_guid: String,
@@ -475,17 +481,25 @@ impl SceneApp {
         if self.jobs.busy() {
             return;
         }
-        if let Some(panel) = &mut self.draft {
-            panel.state.show = true;
-            return;
-        }
         let Some(model) = &self.model else {
             return;
         };
         if !model.manifest.extension().is_some_and(|s| s.eq_ignore_ascii_case("sp")) {
             return;
         }
-        self.draft = Some(DraftPanel::new(self.engine.clone(), model.manifest.to_string_lossy().into_owned(), model.scene.source_sha256.clone()));
+        self.open_draft_from(DraftSource { path: model.manifest.to_string_lossy().into_owned(), source_sha256: model.scene.source_sha256.clone() });
+    }
+    pub(super) fn open_draft_from(&mut self, source: DraftSource) {
+        if let Some(panel) = &mut self.draft
+            && panel.active()
+        {
+            panel.state.show = true;
+            if panel.source_path != source.path || panel.source_hash != source.source_sha256 {
+                panel.state.status = "Close the current draft before opening a different source.".into();
+            }
+            return;
+        }
+        self.draft = Some(DraftPanel::new(self.engine.clone(), source.path, source.source_sha256));
         if let Some(ctx) = self.jobs.repaint_ctx() {
             ctx.request_repaint();
         }

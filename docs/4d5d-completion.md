@@ -407,3 +407,12 @@ preserved Tasks, the modified task's complete observed General values and the un
 task's baseline values. The native screenshot was inspected, and candidate/receipt bytes
 plus 57 protected source hashes stayed unchanged. This is one Planned unassigned
 two-root case; general native saving and structural authoring remain unadmitted.
+
+The metadata-only schedule/cost workflow can open the same draft after its source
+frame is ready. The request carries that panel's explicit path and SHA-256; a retained
+3D scene and its background work cannot supply or block the source identity. Opening
+the draft pauses metadata playback and requests a repaint even when no viewport jobs
+have installed a repaint context. An active draft is brought forward for the same
+source; a different path/hash preserves it and its unapplied forms until explicitly
+closed. Completed closed panels can be replaced. No source file or retained scene/cache
+is changed by this entry point.
