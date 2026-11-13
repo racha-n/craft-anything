@@ -160,3 +160,148 @@ fn progressed_source_is_not_admitted_for_deletion() {
     let hash = writer::hash(&raw, &mut |_| true).unwrap();
     assert!(candidate(&raw, &hash, &req, |_| true).is_err());
 }
+
+#[test]
+fn deletion_layout_hints_are_source_bound_and_reference_validation_stays_authoritative() {
+    let raw = source(110, Some(100));
+    let (hash, req) = request(&raw, 100);
+    let hints = layout_availability(&raw, &hash, |_| true).unwrap();
+    assert_eq!(hints.anchors.len(), 110);
+    assert!(hints.reference_scan_required);
+    assert_eq!(hints.anchors[100].task_guid, req.task_guid);
+    assert_eq!(hints.anchors[100].expected_sibling_index, 100);
+    assert!(layout_availability(&raw, &"0".repeat(64), |_| true).is_err());
+    assert!(layout_availability(&raw, &hash, |_| false).is_err());
+    let e = inspect(&raw, |_| true).unwrap();
+    let mut view = decoded_section(&raw, "PresentationData", &e.sections["PresentationData"], &mut |_| true).unwrap();
+    let taskdata = container(&raw, &mut |_| true).unwrap().decoded.remove("Tasks").unwrap();
+    view.extend(bytes(&taskdata, e.tasks[100].offset + 12, 16).unwrap());
+    let modified = replace(&raw, "PresentationData", &view);
+    let hash = writer::hash(&modified, &mut |_| true).unwrap();
+    assert_eq!(layout_availability(&modified, &hash, |_| true).unwrap().anchors.len(), 110);
+    assert!(candidate(&modified, &hash, &req, |_| true).is_err());
+    let single = source(1, None);
+    let hash = writer::hash(&single, &mut |_| true).unwrap();
+    assert!(layout_availability(&single, &hash, |_| true).unwrap().anchors.is_empty());
+}
+
+#[test]
+fn deletion_draft_undo_redo_preserves_guids_bytes_and_requires_v6_export() {
+    use crate::sp_project::draft::Draft;
+    let raw = source(4, Some(1));
+    let (hash, req) = request(&raw, 1);
+    let expected = candidate(&raw, &hash, &req, |_| true).unwrap();
+    let mut d = Draft::open(raw.clone(), &hash, |_| true).unwrap();
+    d.delete_leaf(0, &req, |_| true).unwrap();
+    assert_eq!(d.bytes(|_| true).unwrap(), expected.bytes);
+    assert!(d.has_authored_edits() && d.has_deletion_edits() && !d.has_creation_edits());
+    assert_eq!(d.undo_deletion_task_guid(), Some(req.task_guid.as_str()));
+    assert_eq!(d.authored_candidate(|_| true).unwrap().receipt.version, 6);
+    assert!(d.candidate(|_| true).is_err());
+    assert!(d.ordered_candidate(|_| true).is_err());
+    assert!(d.structural_candidate(|_| true).is_err());
+    d.undo(1).unwrap();
+    assert_eq!(d.bytes(|_| true).unwrap(), raw);
+    assert!(!d.is_dirty());
+    assert_eq!(d.redo_deletion().unwrap().task_guid, req.task_guid);
+    d.redo(2).unwrap();
+    assert_eq!(d.bytes(|_| true).unwrap(), expected.bytes);
+    assert!(d.delete_leaf(3, &req, |_| true).is_err());
+    assert_eq!(d.revision, 3);
+    assert_eq!(d.bytes(|_| true).unwrap(), expected.bytes);
+}
+
+#[test]
+fn deletion_field_order_stages_retain_chronology_and_hash_chain() {
+    use crate::sp_project::{draft::Draft, task_strings::TextEdit};
+    let raw = source(4, None);
+    let (hash, req) = request(&raw, 0);
+    let mut d = Draft::open(raw, &hash, |_| true).unwrap();
+    d.delete_leaf(0, &req, |_| true).unwrap();
+    let current = d.bytes(|_| true).unwrap();
+    let e = inspect(&current, |_| true).unwrap();
+    let renamed = &e.tasks[0];
+    let moved = &e.tasks[2];
+    d.apply_structural(1, &[], &[TextEdit::TaskName { task_guid: renamed.guid.clone(), expected: renamed.name.clone(), value: "Renamed".into() }], &[], |_| {
+        true
+    })
+    .unwrap();
+    d.apply_structural(
+        2,
+        &[],
+        &[],
+        &[hierarchy::Reparent { task_guid: moved.guid.clone(), expected_parent_guid: None, expected_sibling_index: 2, parent_guid: None, sibling_index: 0 }],
+        |_| true,
+    )
+    .unwrap();
+    let out = d.authored_candidate(|_| true).unwrap();
+    let json = serde_json::to_value(out.receipt).unwrap();
+    assert_eq!(json["version"], 6);
+    assert_eq!(json["stages"].as_array().unwrap().iter().map(|x| x["kind"].as_str().unwrap()).collect::<Vec<_>>(), ["delete", "fields", "order"]);
+    let mut previous = json["prefix"]["output_sha256"].as_str().unwrap();
+    for s in json["stages"].as_array().unwrap() {
+        assert_eq!(s["receipt"]["source_sha256"], previous);
+        previous = s["receipt"]["output_sha256"].as_str().unwrap();
+    }
+    assert_eq!(json["output_sha256"], previous);
+    let before = d.bytes(|_| true).unwrap();
+    assert!(
+        d.apply_structural(3, &[], &[TextEdit::TaskName { task_guid: req.task_guid, expected: "Task1".into(), value: "Missing".into() }], &[], |_| true)
+            .is_err()
+    );
+    assert_eq!(d.bytes(|_| true).unwrap(), before);
+    assert_eq!(d.revision, 3);
+}
+
+#[test]
+fn deletion_history_limits_last_root_and_unsaved_creation_remain_guarded() {
+    use crate::sp_project::draft::Draft;
+    let raw = source(10, None);
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let mut d = Draft::open(raw, &hash, |_| true).unwrap();
+    for revision in 0..8 {
+        let current = d.bytes(|_| true).unwrap();
+        let (_, req) = request(&current, 0);
+        d.delete_leaf(revision, &req, |_| true).unwrap();
+    }
+    let current = d.bytes(|_| true).unwrap();
+    let (_, req) = request(&current, 0);
+    assert!(d.delete_leaf(8, &req, |_| true).is_err());
+    assert_eq!(d.deletion_count(), 8);
+    assert_eq!(d.bytes(|_| true).unwrap(), current);
+    let raw = source(2, None);
+    let (hash, req) = request(&raw, 0);
+    let mut d = Draft::open(raw, &hash, |_| true).unwrap();
+    d.delete_leaf(0, &req, |_| true).unwrap();
+    let current = d.bytes(|_| true).unwrap();
+    let (_, req) = request(&current, 0);
+    assert!(d.delete_leaf(1, &req, |_| true).is_err());
+    let raw = source(4, None);
+    let (hash, req) = request(&raw, 0);
+    let mut d = Draft::open(raw, &hash, |_| true).unwrap();
+    d.delete_leaf(0, &req, |_| true).unwrap();
+    let current = d.bytes(|_| true).unwrap();
+    let e = inspect(&current, |_| true).unwrap();
+    let anchor = &e.tasks[0];
+    d.insert_above(
+        1,
+        &creation::InsertAbove {
+            template_task_guid: anchor.guid.clone(),
+            anchor_task_guid: anchor.guid.clone(),
+            expected_parent_guid: None,
+            expected_sibling_index: 0,
+            task_guid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+            supply_chain_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
+            name: "New".into(),
+            display_id: "NEW".into(),
+        },
+        |_| true,
+    )
+    .unwrap();
+    let current = d.bytes(|_| true).unwrap();
+    let (_, req) = request(&current, 0);
+    assert!(d.delete_leaf(2, &req, |_| true).is_err());
+    assert_eq!(d.revision, 2);
+    assert_eq!(d.bytes(|_| true).unwrap(), current);
+    assert_eq!(d.authored_candidate(|_| true).unwrap().receipt.version, 6);
+}

@@ -9,7 +9,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::ToolError;
-use craft_anything_formats::sp_project::{self, creation, draft::Draft, hierarchy, relocation, task_strings::TextEdit, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{self, creation, deletion, draft::Draft, hierarchy, relocation, task_strings::TextEdit, writer::ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,6 +73,12 @@ enum Request {
         name: String,
         display_id: String,
     },
+    DeleteLeaf {
+        draft_id: u64,
+        expected_source_sha256: String,
+        revision: u64,
+        deletion: deletion::DeleteLeaf,
+    },
     Undo {
         draft_id: u64,
         expected_source_sha256: String,
@@ -106,7 +112,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound draft, inspect shared creation availability and apply guarded fields/order/hierarchy or default Work insertion with generated or explicit identities. Retain atomic bounded history, focused undo/redo and separate chronological version-5 exports; legacy drafts keep their versions. At most eight total insertions/relocations; native saving and general rescheduling remain separate gates.",
+        "Open a source-bound draft, inspect source-bound creation/deletion layout hints and apply guarded fields/order/hierarchy, default Work insertion or unassigned root-leaf deletion. Retain atomic bounded history and GUID-focused undo/redo. Deletion exports use version 6, creation-only exports retain version 5 and legacy drafts keep their versions. At most eight insertions/deletions/relocations; per-target reference validation, native saving and general rescheduling remain independent gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -119,6 +125,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let request: Request = parse_params(params)?;
     let mut offset = 0;
     let mut focus = None;
+    let mut deleted_focus_index = None;
     let mut session = match &request {
         Request::Open { path, expected_source_sha256 } => {
             if ctx.session.ext.get::<EditSession>().is_some_and(|s| s.draft.is_dirty()) {
@@ -142,6 +149,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
                 | Request::Apply { draft_id, expected_source_sha256, revision, .. }
                 | Request::InsertAbove { draft_id, expected_source_sha256, revision, .. }
                 | Request::CreateDefaultWork { draft_id, expected_source_sha256, revision, .. }
+                | Request::DeleteLeaf { draft_id, expected_source_sha256, revision, .. }
                 | Request::Undo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Redo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Close { draft_id, expected_source_sha256, revision, .. }
@@ -198,19 +206,30 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             session.draft.insert_above(revision, &insertion, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
             focus = Some(insertion.task_guid);
         }
+        Request::DeleteLeaf { revision, deletion, .. } => {
+            let index = deletion.expected_sibling_index;
+            session.draft.delete_leaf(revision, &deletion, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            deleted_focus_index = Some(index);
+        }
         Request::Undo { revision, focus_task_guid, .. } => {
+            let restored = session.draft.undo_deletion_task_guid().map(str::to_owned);
             let created_focus = focus_task_guid.as_deref().is_some_and(|id| session.draft.creates_task(id));
             session.draft.undo(revision).map_err(ToolError::invalid)?;
             // Undoing an insertion removes its GUID; fall back to the first page.
-            focus = focus_task_guid.filter(|id| !created_focus || session.draft.creates_task(id));
+            focus = focus_task_guid.filter(|id| !created_focus || session.draft.creates_task(id)).or(restored);
         }
         Request::Redo { revision, focus_task_guid, .. } => {
+            if let Some(removed) = session.draft.redo_deletion()
+                && focus_task_guid.as_deref().is_none_or(|id| id.eq_ignore_ascii_case(&removed.task_guid))
+            {
+                deleted_focus_index = Some(removed.expected_sibling_index);
+            }
             session.draft.redo(revision).map_err(ToolError::invalid)?;
-            focus = focus_task_guid;
+            focus = if deleted_focus_index.is_some() { None } else { focus_task_guid };
         }
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
-            if session.draft.has_creation_edits() {
+            if session.draft.has_authored_edits() {
                 return write_authored(ctx, &session, &output_path, acknowledge_storage_only);
             }
             if session.draft.has_hierarchy_edits() {
@@ -251,6 +270,10 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let tasks = imported.metadata.get("tasks").and_then(Value::as_array).ok_or_else(|| ToolError::invalid("Draft task inventory is missing."))?;
+    if let Some(index) = deleted_focus_index {
+        let task = tasks.get(index.min(tasks.len().saturating_sub(1))).ok_or_else(|| ToolError::invalid("Deletion left no task for focus."))?;
+        focus = Some(task.get("guid").and_then(Value::as_str).ok_or_else(|| ToolError::invalid("Surviving task identity missing."))?.to_owned());
+    }
     let focused_task_guid = focus.clone();
     if let Some(id) = focus {
         if id.len() != 36 {
@@ -272,6 +295,16 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let creation = creation.map_err(|e| format_err(e, "draft creation availability"))?;
+    let mut deletion =
+        deletion::layout_availability(&raw, &imported.source_sha256, |_| !ctx.cancel.is_cancelled()).map_err(|e| format_err(e, "draft deletion layout"))?;
+    if session.draft.has_creation_edits() {
+        deletion.anchors.clear();
+        deletion.reason = Some("Deletion after unsaved creation needs separate saved-view admission.".into());
+    }
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let deletion_anchors: std::collections::BTreeMap<_, _> = deletion.anchors.iter().map(|a| (a.task_guid.as_str(), a)).collect();
     let creation_anchors: std::collections::BTreeMap<_, _> = creation.anchors.iter().map(|a| (a.anchor_task_guid.as_str(), a)).collect();
     let creation_reasons: std::collections::BTreeMap<_, _> = creation.unavailable.iter().map(|r| (r.task_guid.as_str(), r.reason.as_str())).collect();
     let positions: std::collections::BTreeMap<_, _> = outline.positions.iter().map(|p| (p.task_guid.as_str(), p)).collect();
@@ -305,6 +338,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             object.insert("parent_label".into(), json!(parent_label(position.parent_guid.as_deref())));
             object.insert("creation".into(), json!(creation_anchors.get(id)));
             object.insert("creation_reason".into(), json!(creation_reasons.get(id).copied().or(creation.reason.as_deref()).unwrap_or_default()));
+            object.insert("deletion".into(), json!(deletion_anchors.get(id)));
             if let Some(hint) = hierarchy_hints.get(id) {
                 object.insert("indent".into(), json!(hint.indent));
                 object.insert("outdent".into(), json!(hint.outdent));
@@ -319,9 +353,12 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
         "order_edit_count":session.draft.structural_edit_count(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
-        "creation_count":session.draft.creation_count(),"candidate_receipt_version":if session.draft.has_creation_edits() {5} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
+        "creation_count":session.draft.creation_count(),"deletion_count":session.draft.deletion_count(),"candidate_receipt_version":if session.draft.has_deletion_edits() {6} else if session.draft.has_creation_edits() {5} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
         "focused_task_guid":focused_task_guid,"creation_source_sha256":creation.source_sha256,"creation_supported":!creation.anchors.is_empty(),
         "redo_creation_task_guid":session.draft.redo_creation_task_guid(),
+        "undo_deletion_task_guid":session.draft.undo_deletion_task_guid(),
+        "deletion_source_sha256":deletion.source_sha256,"deletion_layout_supported":!deletion.anchors.is_empty(),
+        "deletion_reason":deletion.reason.as_deref().unwrap_or_default(),"deletion_reference_scan_required":deletion.reference_scan_required,
         "creation_reason":creation.reason.as_deref().unwrap_or_default(),"creation_suggested_display_id":creation.suggested_display_id,
         "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
         "task_collection_lookup":imported.coverage.task_collection_lookup,
@@ -367,7 +404,7 @@ fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, a
         return Err(ToolError::invalid("Source changed; reload before exporting the draft."));
     }
     let candidate = session.draft.authored_candidate(|progress| {
-        ctx.report(Some(progress), "Replaying guarded task creation and edits");
+        ctx.report(Some(progress), "Replaying guarded authored task edits");
         !ctx.cancel.is_cancelled()
     });
     if ctx.cancel.is_cancelled() {
@@ -377,7 +414,7 @@ fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, a
     let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
     let evidence = super::static_input::builder(ctx, "formats_project_edit", input.subject,
         json!({"action":"write_candidate","draft_id":session.id,"revision":session.draft.revision,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,"acknowledge_storage_only":acknowledged}))
-        .summary("Prepared a chronological task-creation draft candidate")
+        .summary("Prepared a chronological task draft candidate")
         .confidence(Confidence::Derived)
         .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
         .limitation(Limitation::new("native_persistence_unverified", "Typed stage hash chains and internal guards passed. Native persistence, geometry and scheduling need independent acceptance."))
@@ -398,6 +435,63 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn deletion_draft_focus_undo_redo_and_v6_export_stay_source_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(110, Some(100));
+        std::fs::write(&path, &raw).unwrap();
+        let hash = sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let engine = Engine::new(crate::testing::session());
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let base = |action, revision| json!({"action":action,"draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":revision});
+        let mut inspect = base("inspect", 0);
+        inspect["offset"] = json!(100);
+        let page = call(inspect).unwrap();
+        let target = page["tasks"][0]["guid"].clone();
+        let next = page["tasks"][1]["guid"].clone();
+        assert_eq!(page["deletion_source_sha256"], hash);
+        assert_eq!(page["deletion_reference_scan_required"], true);
+        let mut delete = base("delete_leaf", 0);
+        delete["deletion"] = page["tasks"][0]["deletion"].clone();
+        let mut stale = delete.clone();
+        stale["deletion"]["expected_display_id"] = json!("wrong");
+        assert!(call(stale).is_err());
+        assert_eq!(call(base("inspect", 0)).unwrap()["draft_sha256"], hash);
+        let deleted = call(delete.clone()).unwrap();
+        assert_eq!(deleted["task_total"], 109);
+        assert_eq!(deleted["offset"], 100);
+        assert_eq!(deleted["focused_task_guid"], next);
+        assert_eq!(deleted["undo_deletion_task_guid"], target);
+        assert_eq!(deleted["candidate_receipt_version"], 6);
+        assert_eq!(deleted["deletion_count"], 1);
+        let changed = deleted["draft_sha256"].clone();
+        let mut bad_undo = base("undo", 1);
+        bad_undo["focus_task_guid"] = json!("00000000-0000-0000-0000-000000000000");
+        assert!(call(bad_undo).is_err());
+        assert_eq!(call(base("inspect", 1)).unwrap()["draft_sha256"], changed);
+        let undone = call(base("undo", 1)).unwrap();
+        assert_eq!(undone["draft_sha256"], hash);
+        assert_eq!(undone["focused_task_guid"], target);
+        assert_eq!(undone["offset"], 100);
+        let mut redo = base("redo", 2);
+        redo["focus_task_guid"] = target;
+        let redone = call(redo).unwrap();
+        assert_eq!(redone["draft_sha256"], changed);
+        assert_eq!(redone["focused_task_guid"], next);
+        assert_eq!(redone["offset"], 100);
+        assert!(call(delete).is_err());
+        let output = dir.path().join("deleted.sp");
+        let mut export = base("write_candidate", 3);
+        export["output_path"] = json!(output);
+        export["acknowledge_storage_only"] = json!(true);
+        let published = call(export).unwrap();
+        assert_eq!(published["receipt"]["version"], 6);
+        assert_eq!(published["receipt"]["stages"][0]["kind"], "delete");
+        assert_eq!(published["receipt"]["stages"][0]["receipt"]["deletion"]["task_guid"], page["tasks"][0]["guid"]);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
     }
     #[test]
     fn failed_response_focus_keeps_apply_undo_redo_history_private() {

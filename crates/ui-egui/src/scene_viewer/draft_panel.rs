@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 mod creation_form;
 use creation_form::CreationForm;
+mod deletion_form;
+use deletion_form::DeletionForm;
 
 #[derive(Clone)]
 pub(super) struct DraftSource {
@@ -38,6 +40,8 @@ struct Task {
     creation: Option<craft_anything_formats::sp_project::creation::Anchor>,
     #[serde(default)]
     creation_reason: String,
+    #[serde(default)]
+    deletion: Option<craft_anything_formats::sp_project::deletion::DeleteLeaf>,
     name: String,
     #[serde(default)]
     display_id: String,
@@ -90,6 +94,16 @@ struct Snapshot {
     focused_task_guid: Option<String>,
     #[serde(default)]
     redo_creation_task_guid: Option<String>,
+    #[serde(default)]
+    undo_deletion_task_guid: Option<String>,
+    #[serde(default)]
+    deletion_source_sha256: String,
+    #[serde(default)]
+    deletion_layout_supported: bool,
+    #[serde(default)]
+    deletion_reference_scan_required: bool,
+    #[serde(default)]
+    deletion_reason: String,
     #[serde(default)]
     creation_source_sha256: String,
     #[serde(default)]
@@ -250,6 +264,8 @@ struct State {
     #[serde(default)]
     creation: CreationForm,
     #[serde(default)]
+    deletion: DeletionForm,
+    #[serde(default)]
     order_position: usize,
     #[serde(default)]
     parent_change: Option<Reparent>,
@@ -268,6 +284,27 @@ impl State {
         }
         if value.task_collection_lookup.as_ref().is_some_and(|r| !r.shape_valid() || r.entries_checked != value.task_total) {
             return Err("Draft lookup coverage is inconsistent.".into());
+        }
+        if value.deletion_layout_supported
+            && (value.task_total < 2
+                || value.task_total >= 512
+                || value.deletion_source_sha256.len() != 64
+                || value.deletion_source_sha256 != value.draft_sha256
+                || !value.deletion_reference_scan_required)
+            || !value.deletion_source_sha256.is_empty() && value.deletion_source_sha256 != value.draft_sha256
+            || value.undo_deletion_task_guid.as_ref().is_some_and(|id| id.len() != 36 || !value.can_undo)
+            || value.tasks.iter().any(|t| {
+                t.deletion.as_ref().is_some_and(|r| {
+                    !value.deletion_layout_supported
+                        || r.task_guid != t.guid
+                        || r.expected_parent_guid.is_some()
+                        || t.parent_guid.is_some()
+                        || r.expected_sibling_index != t.sibling_index
+                        || r.expected_display_id != t.display_id
+                })
+            })
+        {
+            return Err("Draft deletion layout hints or undo focus are inconsistent.".into());
         }
         if value.creation_supported && (value.creation_source_sha256.len() != 64 || value.creation_source_sha256 != value.draft_sha256)
             || !value.creation_source_sha256.is_empty() && value.creation_source_sha256 != value.draft_sha256
@@ -322,6 +359,7 @@ impl State {
         self.order_position = value.tasks.get(self.selected).map_or(1, |t| t.sibling_index.saturating_add(1));
         self.parent_change = None;
         self.creation = CreationForm::new(&value.creation_suggested_display_id);
+        self.deletion = DeletionForm::default();
         self.snapshot = Some(value);
         self.discard = false;
         self.acknowledge = false;
@@ -378,6 +416,11 @@ impl DraftPanel {
             }
             if action == "redo"
                 && let Some(id) = &s.redo_creation_task_guid
+            {
+                params["focus_task_guid"] = json!(id);
+            }
+            if action == "undo"
+                && let Some(id) = &s.undo_deletion_task_guid
             {
                 params["focus_task_guid"] = json!(id);
             }
@@ -480,7 +523,7 @@ impl DraftPanel {
                     for (index, task) in snapshot.tasks.iter().enumerate() { ui.selectable_value(&mut self.state.selected, index, task.label()).on_hover_text(&task.guid); }
                 });
                 if let Some(task) = snapshot.tasks.get(self.state.selected) {
-                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); self.state.labels = TaskLabels::from_task(task); self.state.order_position=task.sibling_index.saturating_add(1); self.state.parent_change=None; self.state.creation=CreationForm::new(&snapshot.creation_suggested_display_id); }
+                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); self.state.labels = TaskLabels::from_task(task); self.state.order_position=task.sibling_index.saturating_add(1); self.state.parent_change=None; self.state.creation=CreationForm::new(&snapshot.creation_suggested_display_id); self.state.deletion=DeletionForm::default(); }
                     if let Some(derived) = snapshot.derived_tasks.items.iter().find(|t| t.guid == task.guid) {
                         ui.label(derived.planned_start.zip(derived.planned_finish).map(|(a,b)| format!("Preview dates: {} → {}", project_panel::wallclock(a), project_panel::wallclock(b))).unwrap_or_else(|| "Preview dates unresolved".into()));
                         for reason in derived.unresolved_reasons.iter().take(4) { ui.small(reason); }
@@ -507,7 +550,7 @@ impl DraftPanel {
                             if ui.add_enabled(self.state.order_position>1,egui::Button::new("Earlier")).clicked() { self.state.order_position=self.state.order_position.saturating_sub(1); }
                             if ui.add_enabled(self.state.order_position<task.sibling_total,egui::Button::new("Later")).clicked() { self.state.order_position=self.state.order_position.saturating_add(1); }
                         }); });
-                        ui.small(format!("{} of {} insertions/relocations in this draft.",snapshot.order_edit_count,snapshot.order_edit_limit));
+                        ui.small(format!("{} of {} insertions/deletions/relocations in this draft.",snapshot.order_edit_count,snapshot.order_edit_limit));
                         if snapshot.order_edit_count>=snapshot.order_edit_limit { ui.small("Export this candidate before starting another draft for more ordering changes."); }
                     });
                     ui.collapsing("Task hierarchy", |ui| {
@@ -539,6 +582,7 @@ impl DraftPanel {
                         || self.state.fields.iter().any(|f| !matches!(f.proposal(),Ok(None)))
                         || self.state.parent_change.is_some() || self.state.order_position != task.sibling_index.saturating_add(1);
                     if let Some(params) = self.state.creation.show(ui,task,snapshot,pending) { action=Some(("create_default_work",params)); }
+                    if let Some(params)=self.state.deletion.show(ui,task,snapshot,pending) { action=Some(("delete_leaf",params)); }
                     ui.collapsing("Advanced scalar fields", |ui| {
                         ui.small("Values use source storage units. Quantity and utilization are separate fields; changed fields on this page are applied together.");
                         ui.horizontal(|ui| {

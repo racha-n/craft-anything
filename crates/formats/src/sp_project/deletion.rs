@@ -44,6 +44,54 @@ pub struct Candidate {
     pub receipt: Receipt,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct LayoutAvailability {
+    pub version: u32,
+    pub source_sha256: String,
+    pub anchors: Vec<DeleteLeaf>,
+    pub reason: Option<String>,
+    /// Layout hints do not bypass the authoritative per-target reference scan.
+    pub reference_scan_required: bool,
+}
+/// Inspect source/profile/presentation layout once, without constructing candidates per row.
+pub fn layout_availability(raw: &[u8], expected: &str, mut keep: impl FnMut(f32) -> bool) -> std::result::Result<LayoutAvailability, FormatError> {
+    if raw.len() > FILE_LIMIT || expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format_error(fail("invalid_identity", "Choose a source up to 256 MiB and its 64-digit SHA-256")));
+    }
+    let result: Result<(String, Vec<DeleteLeaf>)> = (|| {
+        let (hash, _, evidence) = creation::unassigned_roots(raw, expected, &mut keep)?;
+        let section = evidence
+            .sections
+            .get("PresentationData")
+            .ok_or_else(|| fail("missing_dependency", "This project lacks the saved view state required for guarded deletion"))?;
+        let data = decoded_section(raw, "PresentationData", section, &mut keep)?;
+        presentation::validate_source(&data, &evidence.tasks, &mut keep)?;
+        let anchors = evidence
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| DeleteLeaf {
+                task_guid: t.guid.clone(),
+                expected_parent_guid: None,
+                expected_sibling_index: i,
+                expected_display_id: t.display_id.clone(),
+            })
+            .collect();
+        Ok((hash, anchors))
+    })();
+    match result {
+        Ok((hash, anchors)) => Ok(LayoutAvailability { version: 1, source_sha256: hash, anchors, reason: None, reference_scan_required: true }),
+        Err(e) if e.code == "cancelled" || e.code == "stale_source" => Err(format_error(e)),
+        Err(e) => Ok(LayoutAvailability {
+            version: 1,
+            source_sha256: expected.to_ascii_lowercase(),
+            anchors: Vec::new(),
+            reason: Some(e.message),
+            reference_scan_required: true,
+        }),
+    }
+}
+
 fn needles(primary: &[u8], supply: &[u8]) -> Result<Vec<Vec<u8>>> {
     let mut result = Vec::new();
     for id in [primary, supply] {

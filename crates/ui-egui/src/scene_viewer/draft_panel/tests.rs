@@ -284,6 +284,132 @@ fn settle(harness: &mut egui_kittest::Harness<'_, DraftPanel>) {
     }
 }
 #[test]
+fn deletion_widget_pages_cancel_undo_redo_and_export_follow_the_engine() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(110, Some(100));
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let panel = DraftPanel::new(engine, path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    h.get_by_label("Next tasks").click();
+    settle(&mut h);
+    let target = h.state().state.snapshot.as_ref().unwrap().tasks[0].guid.clone();
+    let next = h.state().state.snapshot.as_ref().unwrap().tasks[1].guid.clone();
+    h.get_by_label("Delete task").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete task").click();
+    h.run();
+    h.state_mut().state.labels.name = "Pending label".into();
+    h.run();
+    h.get_by_label("Cancel deletion").scroll_to_me();
+    h.run();
+    h.get_by_label("Cancel deletion").click();
+    h.run();
+    assert_eq!(h.state().state.labels.name, "Pending label");
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().revision, 0);
+    h.state_mut().state.labels.name = "Task101".into();
+    h.run();
+    h.get_by_label("Delete task").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete task").click();
+    h.run();
+    h.get_by_label("Delete from draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete from draft").click();
+    settle(&mut h);
+    let deleted = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(deleted.task_total, 109);
+    assert_eq!(deleted.offset, 100);
+    assert_eq!(deleted.tasks[h.state().state.selected].guid, next);
+    assert_eq!(deleted.undo_deletion_task_guid.as_deref(), Some(target.as_str()));
+    h.get_by_label("Undo").scroll_to_me();
+    h.run();
+    h.get_by_label("Undo").click();
+    settle(&mut h);
+    let restored = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(restored.offset, 100);
+    assert_eq!(restored.tasks[h.state().state.selected].guid, target);
+    assert!(!restored.dirty);
+    h.get_by_label("Redo").click();
+    settle(&mut h);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().tasks[h.state().state.selected].guid, next);
+    h.get_by_label("Delete task").scroll_to_me();
+    h.run();
+    h.get_by_label("Delete task").click();
+    h.run();
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (label, planning) in [("deletion-widget-studio.png", false), ("deletion-widget-planning.png", true)] {
+            h.state_mut().state.planning = planning;
+            h.run();
+            h.get_by_label("Delete from draft").scroll_to_me();
+            h.run();
+            let image = folder.join(label);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+        }
+    }
+    let output = dir.path().join("deleted.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
+    h.get_by_label("I will validate this experimental candidate in the native application.").click();
+    h.run();
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 6);
+    assert_eq!(receipt["stages"][0]["kind"], "delete");
+    assert_eq!(receipt["stages"][0]["receipt"]["deletion"]["task_guid"], target);
+    assert_eq!(std::fs::read(path).unwrap(), raw);
+}
+
+#[test]
+fn deletion_snapshot_rejects_stale_layout_guards_and_invalid_undo_cues() {
+    let source = "a".repeat(64);
+    let mut good = snapshot(1, 0);
+    good.task_total = 2;
+    good.tasks[0].sibling_total = 2;
+    good.tasks[0].assignments.clear();
+    let mut second = good.tasks[0].clone();
+    second.guid = "22222222-2222-2222-2222-222222222222".into();
+    second.sibling_index = 1;
+    second.display_id = "ID2".into();
+    good.tasks.push(second);
+    good.draft_sha256 = "b".repeat(64);
+    good.deletion_source_sha256 = good.draft_sha256.clone();
+    good.deletion_layout_supported = true;
+    good.deletion_reference_scan_required = true;
+    good.tasks[0].deletion = Some(craft_anything_formats::sp_project::deletion::DeleteLeaf {
+        task_guid: good.tasks[0].guid.clone(),
+        expected_parent_guid: None,
+        expected_sibling_index: 0,
+        expected_display_id: "ID1".into(),
+    });
+    let mut state = State::default();
+    state.accept(good.clone(), &source, None).unwrap();
+    let mut stale = good.clone();
+    stale.deletion_source_sha256 = "c".repeat(64);
+    assert!(state.accept(stale, &source, None).is_err());
+    let mut stale = good.clone();
+    stale.tasks[0].deletion.as_mut().unwrap().expected_display_id = "wrong".into();
+    assert!(state.accept(stale, &source, None).is_err());
+    let mut stale = good.clone();
+    stale.undo_deletion_task_guid = Some(good.tasks[0].guid.clone());
+    assert!(state.accept(stale, &source, None).is_err());
+    let mut stale = good;
+    stale.deletion_reference_scan_required = false;
+    assert!(state.accept(stale, &source, None).is_err());
+}
+#[test]
 fn creation_widget_focus_history_cancel_and_export_follow_the_engine() {
     use egui_kittest::kittest::Queryable as _;
     let dir = tempfile::tempdir().unwrap();
@@ -507,6 +633,11 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         draft_sha256: String::new(),
         focused_task_guid: None,
         redo_creation_task_guid: None,
+        undo_deletion_task_guid: None,
+        deletion_source_sha256: String::new(),
+        deletion_layout_supported: false,
+        deletion_reference_scan_required: false,
+        deletion_reason: String::new(),
         creation_source_sha256: String::new(),
         creation_supported: false,
         creation_suggested_display_id: String::new(),
@@ -528,6 +659,7 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
             guid: "11111111-1111-1111-1111-111111111111".into(),
             creation: None,
             creation_reason: String::new(),
+            deletion: None,
             name: "Task".into(),
             display_id: "ID1".into(),
             parent_guid: None,

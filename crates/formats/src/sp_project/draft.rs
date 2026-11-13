@@ -25,6 +25,11 @@ pub struct Draft {
     cursor: usize,
     pub revision: u64,
 }
+#[derive(Clone, Copy)]
+enum Authored<'a> {
+    Insert(&'a super::creation::InsertAbove),
+    Delete(&'a super::deletion::DeleteLeaf),
+}
 impl Draft {
     pub fn open(raw: impl Into<Arc<[u8]>>, expected: &str, mut keep: impl FnMut(f32) -> bool) -> Result<Self, String> {
         let raw = raw.into();
@@ -56,7 +61,38 @@ impl Draft {
         self.versions.get(self.cursor).map(|v| v.replay.as_slice()).unwrap_or_default()
     }
     pub fn has_creation_edits(&self) -> bool {
+        self.creation_count() > 0
+    }
+    pub fn has_authored_edits(&self) -> bool {
         !self.operations().is_empty()
+    }
+    pub fn deletion_count(&self) -> usize {
+        self.operations().iter().filter(|o| matches!(o, replay::Operation::Delete(_))).count()
+    }
+    pub fn has_deletion_edits(&self) -> bool {
+        self.deletion_count() > 0
+    }
+    pub fn undo_deletion_task_guid(&self) -> Option<&str> {
+        let previous = self.versions.get(self.cursor.checked_sub(1)?)?;
+        self.operations().iter().find_map(|op| match op {
+            replay::Operation::Delete(r)
+                if !previous.replay.iter().any(|o| matches!(o,replay::Operation::Delete(p) if p.task_guid.eq_ignore_ascii_case(&r.task_guid))) =>
+            {
+                Some(r.task_guid.as_str())
+            }
+            _ => None,
+        })
+    }
+    pub fn redo_deletion(&self) -> Option<&super::deletion::DeleteLeaf> {
+        let next = self.versions.get(self.cursor.checked_add(1)?)?;
+        next.replay.iter().find_map(|op| match op {
+            replay::Operation::Delete(r)
+                if !self.operations().iter().any(|o| matches!(o,replay::Operation::Delete(p) if p.task_guid.eq_ignore_ascii_case(&r.task_guid))) =>
+            {
+                Some(r)
+            }
+            _ => None,
+        })
     }
     pub fn structural_edit_count(&self) -> usize {
         self.structural_edits().len().saturating_add(self.replay_counts().1)
@@ -87,7 +123,7 @@ impl Draft {
         self.cursor > 0
     }
     pub fn is_dirty(&self) -> bool {
-        self.has_creation_edits() || !self.edits().is_empty() || !self.text_edits().is_empty() || !self.structural_edits().is_empty()
+        self.has_authored_edits() || !self.edits().is_empty() || !self.text_edits().is_empty() || !self.structural_edits().is_empty()
     }
     pub fn can_redo(&self) -> bool {
         self.cursor.checked_add(1).is_some_and(|n| n < self.versions.len())
@@ -117,8 +153,13 @@ impl Draft {
         structured::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.structural_edits(), keep).map_err(error)
     }
     fn require_legacy_export(&self) -> Result<(), String> {
-        if self.has_creation_edits() {
-            return Err("This draft creates tasks; export its version-5 chronological candidate".into());
+        if self.has_authored_edits() {
+            return Err(if self.has_deletion_edits() {
+                "This draft deletes tasks; export its version-6 chronological candidate"
+            } else {
+                "This draft creates tasks; export its version-5 chronological candidate"
+            }
+            .into());
         }
         Ok(())
     }
@@ -126,7 +167,7 @@ impl Draft {
         replay::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.structural_edits(), self.operations(), keep).map_err(error)
     }
     pub fn bytes(&self, keep: impl FnMut(f32) -> bool) -> Result<Vec<u8>, String> {
-        if self.has_creation_edits() {
+        if self.has_authored_edits() {
             return self.authored_candidate(keep).map(|c| c.bytes);
         }
         if !self.is_dirty() {
@@ -180,7 +221,7 @@ impl Draft {
         relocations: &[hierarchy::Reparent],
         mut keep: impl FnMut(f32) -> bool,
     ) -> Result<(), String> {
-        if self.has_creation_edits() {
+        if self.has_authored_edits() {
             return self.apply_replay(revision, edits, texts, relocations, None, &mut keep);
         }
         let next = self.check_revision(revision)?;
@@ -265,7 +306,13 @@ impl Draft {
         Ok(())
     }
     pub fn insert_above(&mut self, revision: u64, request: &super::creation::InsertAbove, mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
-        self.apply_replay(revision, &[], &[], &[], Some(request), &mut keep)
+        self.apply_replay(revision, &[], &[], &[], Some(Authored::Insert(request)), &mut keep)
+    }
+    pub fn delete_leaf(&mut self, revision: u64, request: &super::deletion::DeleteLeaf, mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+        if self.has_creation_edits() {
+            return Err("Deletion after unsaved creation needs separate presentation-state admission".into());
+        }
+        self.apply_replay(revision, &[], &[], &[], Some(Authored::Delete(request)), &mut keep)
     }
     fn apply_replay(
         &mut self,
@@ -273,14 +320,14 @@ impl Draft {
         scalars: &[ScalarEdit],
         texts: &[TextEdit],
         relocations: &[hierarchy::Reparent],
-        insertion: Option<&super::creation::InsertAbove>,
+        authored: Option<Authored<'_>>,
         keep: &mut dyn FnMut(f32) -> bool,
     ) -> Result<(), String> {
         let next_revision = self.check_revision(revision)?;
         if self.cursor >= 64 {
             return Err("Draft history is limited to 64 transactions; export before starting another draft".into());
         }
-        if scalars.is_empty() && texts.is_empty() && relocations.is_empty() && insertion.is_none() {
+        if scalars.is_empty() && texts.is_empty() && relocations.is_empty() && authored.is_none() {
             return Err("Choose at least one draft edit".into());
         }
         if scalars.len().saturating_add(texts.len()).saturating_add(relocations.len()) > 256 || relocations.len() > ordered::ORDER_LIMIT {
@@ -289,8 +336,10 @@ impl Draft {
         let current = self.bytes(&mut *keep)?;
         let parsed = parse_metadata(&current, &mut *keep).map_err(error)?;
         // Validate each new transaction against the current revision before merging recipes.
-        if let Some(request) = insertion {
+        if let Some(Authored::Insert(request)) = authored {
             super::creation::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
+        } else if let Some(Authored::Delete(request)) = authored {
+            super::deletion::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
         } else {
             validate(&current, &parsed.source_sha256, scalars, texts, relocations, keep)?;
         }
@@ -314,8 +363,11 @@ impl Draft {
                 .cloned()
                 .map(replay::Operation::Relocate),
         );
-        if let Some(request) = insertion {
+        if let Some(Authored::Insert(request)) = authored {
             version.replay.push(replay::Operation::Create(request.clone()));
+        }
+        if let Some(Authored::Delete(request)) = authored {
+            version.replay.push(replay::Operation::Delete(request.clone()));
         }
         replay::candidate(&self.original, &self.source_sha256, &version.scalars, &version.texts, &version.relocations, &version.replay, &mut *keep)
             .map_err(error)?;

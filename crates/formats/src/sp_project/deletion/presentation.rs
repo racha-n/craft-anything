@@ -10,6 +10,9 @@ struct Layout {
     selected: Option<Vec<u8>>,
     entries: Vec<(Vec<u8>, usize)>,
 }
+pub(super) fn validate_source(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<()> {
+    validate(data, tasks, callback).map(|_| ())
+}
 fn validate(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<Layout> {
     if data.len() > STREAM_LIMIT {
         return Err(fail("limit", "PresentationData exceeds 16 MiB"));

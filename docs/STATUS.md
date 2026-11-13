@@ -361,8 +361,8 @@ and one engine focused cases. Two current CLI deletion files pass 492 native
 General comparisons and exact Tasks through save/unload/reopen. The first-row case
 exercises lookup `[1, 2, 0]`; five earlier creation SP/receipt identities and all 57
 protected hashes remain unchanged. Thirteen refusal calls and two inspected native
-images pass. The CLI is rebuilt; desktop/viewer are reused. Generic deletion,
-native Save and draft/UI deletion remain pending.
+images pass. The CLI is rebuilt; desktop/viewer are reused. Generic deletion and
+native Save remain pending; draft/UI integration is covered below.
 See [the receipt and acceptance contract](sp-task-deletion-controls.md#standalone-candidate-acceptance).
 
 ### Draft response publication (R3.14)
@@ -373,7 +373,37 @@ pre-cancelled-request regressions preserve history/hash. Nine frozen engine chec
 pass with 704 target tests (9 ignored) and nine focused cases. Four
 focus refusals in fourteen MCP calls retain state; two deletion SP/receipt identities
 reuse accepted native492 evidence without a new UI run. Schemas/protected57 hashes
-stay unchanged. Draft deletion replay/forms remain pending.
+stay unchanged. The following section records deletion replay/form integration.
+
+### Chronological deletion draft and forms (R3.14)
+
+Guarded unassigned Planned root-leaf deletion now uses the shared chronological
+draft, bounded history and structural budget. Source-bound layout hints defer the
+authoritative target-reference scan until deletion; a hint does not guarantee that
+the request is admitted. The draft selects a surviving neighbor, Undo restores the
+removed GUID and Redo selects the neighbor again across paged inventories. The
+deletion form preserves pending edits on local cancel and calls the same engine
+tool used by CLI/MCP. Export remains a separate experimental candidate.
+
+Receipts containing deletion use version 6 and retain typed per-stage hash chains.
+Creation-only version-5 exports and earlier schemas remain unchanged. Creation
+after admitted deletion is covered; deletion after unsaved creation remains
+unavailable because creation does not construct native presentation rows.
+
+All fifteen frozen checks pass with 2,808 all-target tests
+(25 ignored), including ten deletion format, ten draft
+engine and sixteen widget tests. Desktop, CLI and viewer were rebuilt. Sixteen
+widget images, two viewer layouts and two new native captures were inspected.
+Four version-6 MCP cases pass 48 calls and seventeen refusals.
+Six legacy version-5 SP/receipt pairs remain identical; two delete-only candidates
+match the earlier standalone files and reuse their 492 native General comparisons.
+Two additional files cover deletion followed by rename/order and deletion followed
+by generated-identity creation with undo/redo. Both pass native Save As, unload and
+reopen with 574 General comparisons and exact Task section bytes. This evidence is
+specific to those cases and the admitted native build. Eight declared geometry
+frame comparisons retain two instances and one definition; all 57 protected source
+hashes remain unchanged. Generic deletion, deletion after unsaved creation, native
+transaction-history equivalence, general scheduling and generic Save remain open.
 
 ### Readable CSV dates and reusable templates (R3.14)
 
