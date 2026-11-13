@@ -2493,7 +2493,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [ ] Add task/hierarchy/dependency editing, rescheduling, critical-path analysis, calendar editing and baselines before enabling their grey Plan commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
       Establish independent native task/relationship/lag controls before structural SP transactions and scheduling admission.
       Guarded variable-length task name/Display ID candidates matched independent native controls and passed five native round trips, including one geometry-bearing assigned task. Creation/deletion, hierarchy, dependencies and scheduling remain pending.
-      - [ ] Integrate guarded task labels into shared scalar/text draft history and planning forms.
+      - [ ] Integrate guarded task labels into shared scalar/text draft history and planning forms. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
