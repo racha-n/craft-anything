@@ -344,6 +344,42 @@ struct Index<'a> {
     day_types: BTreeMap<&'a str, (&'a str, &'a DayType)>,
     exceptions: BTreeMap<&'a str, BTreeMap<i64, &'a str>>,
 }
+impl<'a> Index<'a> {
+    fn day_type(
+        &self,
+        calendar: &'a Calendar,
+        midnight: i64,
+        cancelled: &mut dyn FnMut() -> bool,
+    ) -> std::result::Result<(&'a str, &'a DayType), CalendarError> {
+        let own_exception = self.exceptions.get(calendar.guid.as_str()).and_then(|dates| dates.get(&midnight)).copied();
+        let day_guid = if let Some(guid) = own_exception {
+            guid
+        } else {
+            let mut parent = calendar.parent_guid.as_deref();
+            while let Some(id) = parent {
+                if cancelled() {
+                    return Err(CalendarError::Cancelled);
+                }
+                let p = self.calendars.get(id).copied().ok_or_else(|| CalendarError::MissingCalendar { guid: Some(id.into()) })?;
+                if self.exceptions.get(p.guid.as_str()).is_some_and(|dates| dates.contains_key(&midnight)) {
+                    return Err(CalendarError::Unsupported { reason: "ancestor exception inheritance has not been validated".into() });
+                }
+                parent = p.parent_guid.as_deref();
+            }
+            let weekday = usize::try_from((midnight.div_euclid(DAY).rem_euclid(7) + 4).rem_euclid(7)).map_err(|_| CalendarError::DateOverflow)?;
+            calendar
+                .weekday_day_type_guids
+                .get(weekday)
+                .and_then(Option::as_deref)
+                .ok_or_else(|| CalendarError::Unsupported { reason: "nil weekday/inherited weekday has not been validated".into() })?
+        };
+        let (_, kind) = self.day_types.get(day_guid).copied().ok_or_else(|| CalendarError::InvalidData { reason: "day type missing".into() })?;
+        Ok((day_guid, kind))
+    }
+}
+
+mod reverse;
+
 impl Calendars {
     fn index(&self) -> Result<Index<'_>> {
         if self.schema_version != 1 {
@@ -484,29 +520,7 @@ impl Calendars {
                 return Err(CalendarError::Cancelled);
             }
             let midnight = day.checked_mul(DAY).ok_or(CalendarError::DateOverflow)?;
-            let own_exception = index.exceptions.get(id).and_then(|dates| dates.get(&midnight)).copied();
-            let day_guid = if let Some(guid) = own_exception {
-                guid
-            } else {
-                let mut parent = calendar.parent_guid.as_deref();
-                while let Some(id) = parent {
-                    if cancelled() {
-                        return Err(CalendarError::Cancelled);
-                    }
-                    let p = index.calendars.get(id).copied().ok_or_else(|| CalendarError::MissingCalendar { guid: Some(id.into()) })?;
-                    if index.exceptions.get(p.guid.as_str()).is_some_and(|dates| dates.contains_key(&midnight)) {
-                        return Err(CalendarError::Unsupported { reason: "ancestor exception inheritance has not been validated".into() });
-                    }
-                    parent = p.parent_guid.as_deref();
-                }
-                let weekday = usize::try_from((day.rem_euclid(7) + 4).rem_euclid(7)).map_err(|_| CalendarError::DateOverflow)?;
-                calendar
-                    .weekday_day_type_guids
-                    .get(weekday)
-                    .and_then(Option::as_deref)
-                    .ok_or_else(|| CalendarError::Unsupported { reason: "nil weekday/inherited weekday has not been validated".into() })?
-            };
-            let (_, kind) = index.day_types.get(day_guid).copied().ok_or_else(|| CalendarError::InvalidData { reason: "day type missing".into() })?;
+            let (day_guid, kind) = index.day_type(calendar, midnight, &mut cancelled)?;
             match kind.kind_storage {
                 2 => {}
                 1 => {
@@ -758,6 +772,40 @@ mod tests {
         assert!(matches!(c.working_segments(None, 0, 1), Err(CalendarError::InvalidData { .. })));
         assert!(matches!(data().working_segments(None, UNSPECIFIED_WALLCLOCK, 1), Err(CalendarError::Unsupported { .. })));
     }
+    #[test]
+    fn reverse_work_skips_weekends_breaks_and_own_exceptions() {
+        let mut c = data();
+        let budget = WorkingBudget::default();
+        // Monday opening subtracts Friday's full workday, not Sunday wall time.
+        let monday = 1794214800;
+        assert_eq!(c.working_start_before_with_budget(None, monday, 28800, budget, || false).unwrap(), 1793955600);
+        // A finish at Tuesday closing round-trips over two full workdays.
+        let start = c.working_start_before_with_budget(None, 1794330000, 57600, budget, || false).unwrap();
+        assert_eq!(start, monday);
+        assert_eq!(c.working_segments(None, start, 57600).unwrap().finish_wallclock, 1794330000);
+        c.records[0].exceptions.push(DateException { offset: 0, date_wallclock: 1794268800, day_type_guid: guid(3), ordinal_storage: 0 });
+        assert_eq!(c.working_start_before_with_budget(None, 1794387600, 28800, budget, || false).unwrap(), monday);
+        c.records[0].day_types[0].intervals = vec![interval(9 * 3600, 12 * 3600), interval(13 * 3600, 17 * 3600)];
+        assert_eq!(c.working_start_before_with_budget(None, monday + 5 * 3600, 2 * 3600, budget, || false).unwrap(), monday + 2 * 3600);
+    }
+
+    #[test]
+    fn reverse_work_obeys_budgets_cancellation_and_source_validation() {
+        let c = data();
+        assert_eq!(c.working_start_before_with_budget(None, 0, 60, WorkingBudget::default(), || true), Err(CalendarError::Cancelled));
+        for budget in [WorkingBudget { max_scanned_days: 0, max_segments: 10 }, WorkingBudget { max_scanned_days: 10, max_segments: 0 }] {
+            assert!(matches!(c.working_start_before_with_budget(None, 1794243600, 60, budget, || false), Err(CalendarError::Limit { .. })));
+        }
+        assert!(matches!(
+            c.working_start_before_with_budget(None, UNSPECIFIED_WALLCLOCK, 60, WorkingBudget::default(), || false),
+            Err(CalendarError::Unsupported { .. })
+        ));
+        assert_eq!(c.working_start_before_with_budget(None, 123, 0, WorkingBudget::default(), || false).unwrap(), 123);
+        let mut invalid = c;
+        invalid.records[0].parent_guid = Some(guid(1));
+        assert!(matches!(invalid.working_start_before_with_budget(None, 123, 60, WorkingBudget::default(), || false), Err(CalendarError::InvalidData { .. })));
+    }
+
     #[test]
     fn unverified_ancestor_exception_inheritance_is_explicit() {
         let mut c = data();

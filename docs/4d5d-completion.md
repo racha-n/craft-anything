@@ -310,7 +310,34 @@ equality as a substitute for working-boundary semantics. These observations
 cover the exception-free default Project Calendar only. Runtime preview support,
 general native rescheduling and broader source-policy admission are unchanged.
 
+## Explicit signed relationship preview
+
+The opt-in `four_relationships_signed_lag` model extends the read-only schedule tool
+with the four observed relationship types and signed upstream-calendar lag.
+Backward working-time allocation uses the same day/exception rules as forward
+allocation, with per-call scan/interval limits and a shared cancellation budget.
+Target finish bounds normalize across non-working gaps before subtracting task
+duration. All start bounds remain floored by the explicit anchor. The default
+`fs_only` policy retains the version-1 contract; the opt-in result is version 2
+and names its relationship model. General native parity, source constraints,
+progress, calendar overrides, critical paths and native schedule writing remain
+unadmitted. See [the declared model](sp-declared-schedule-model.md).
+
+All thirteen frozen checks pass: formats/analysis/engine all-target tests
+(2,831 passed, 19 ignored), strict clippy, layers, locks, secrets, wasm,
+tools, doctests and formatting; CLI and desktop were rebuilt. Focused suites pass
+8 calendar, 9 scheduling and 2 tool-contract tests. The actual CLI/MCP matches
+all 51 start/finish/duration values in eight previously verified native controls
+(17 tasks), retains two exact default version-1 results and their explicit
+`fs_only` equivalents, and passes 12 refusals across 35 MCP calls. All 57 protected
+inputs stay unchanged. The 845-file source/schema freeze includes four changed
+existing source files and one new module; 840 baseline hashes remain unchanged.
+This comparison reuses the independently collected native observations and adds
+no native round trips or native-parity certification.
+
 ## Declared FS earliest-date preview
+
+The following describes the default version-1 model and its original validation.
 
 `formats_project_schedule_preview` is read-only. It requires source SHA-256, an explicit
 nonnegative minute-aligned naive wall-clock anchor, and a declaration that the tasks are

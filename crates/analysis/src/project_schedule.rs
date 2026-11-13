@@ -1,4 +1,4 @@
-//! Bounded declared-model FS earliest dates. This is not native rescheduling or CPM.
+//! Bounded declared-model earliest dates. This is not native rescheduling or CPM.
 use craft_anything_formats::project_calendar::{self, Calendars, WorkAllocation, WorkingBudget};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,6 +8,33 @@ const TASK_LIMIT: usize = 512;
 const EDGE_LIMIT: usize = 1024;
 const WORK_LIMIT: u64 = 1_000_000;
 const TICK_LIMIT: usize = 200_000;
+
+/// Explicit preview policy. The historical FS-only model remains the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleModel {
+    #[default]
+    FsOnly,
+    FourRelationshipsSignedLag,
+}
+
+// Source and target boundaries for the observed native storage values.
+struct Relationship {
+    storage: u32,
+    source_start: bool,
+    target_finish: bool,
+}
+const RELATIONSHIPS: [Relationship; 4] = [
+    Relationship { storage: 1, source_start: false, target_finish: false },
+    Relationship { storage: 2, source_start: true, target_finish: true },
+    Relationship { storage: 3, source_start: true, target_finish: false },
+    Relationship { storage: 4, source_start: false, target_finish: true },
+];
+struct Incoming {
+    predecessor: String,
+    lag: i64,
+    relationship: &'static Relationship,
+}
 
 #[derive(Deserialize)]
 struct Link {
@@ -40,6 +67,8 @@ pub struct Dates {
 #[derive(Debug, Serialize)]
 pub struct Preview {
     pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relationship_model: Option<ScheduleModel>,
     pub anchor_wallclock: i64,
     pub task_count: usize,
     pub edge_count: usize,
@@ -50,7 +79,17 @@ pub struct Preview {
     pub limitations: Vec<&'static str>,
 }
 
-pub fn from_metadata(metadata: &Value, anchor: i64, declared_unconstrained_fixed_work: bool, mut cancelled: impl FnMut() -> bool) -> Result<Preview, String> {
+pub fn from_metadata(metadata: &Value, anchor: i64, declared_unconstrained_fixed_work: bool, cancelled: impl FnMut() -> bool) -> Result<Preview, String> {
+    from_metadata_with_model(metadata, anchor, declared_unconstrained_fixed_work, ScheduleModel::FsOnly, cancelled)
+}
+
+pub fn from_metadata_with_model(
+    metadata: &Value,
+    anchor: i64,
+    declared_unconstrained_fixed_work: bool,
+    model: ScheduleModel,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<Preview, String> {
     if cancelled() {
         return Err("Schedule preview cancelled".into());
     }
@@ -77,7 +116,7 @@ pub fn from_metadata(metadata: &Value, anchor: i64, declared_unconstrained_fixed
     let hex = metadata.pointer("/raw_sections/Calendars/data_hex").and_then(Value::as_str).ok_or("Source calendars are absent")?;
     let bytes = crate::project_model::decode_hex(hex, project_calendar::MAX_BYTES)?;
     let calendars = project_calendar::parse(&bytes).map_err(|e| e.to_string())?;
-    calculate(&calendars, &tasks, anchor, declared_unconstrained_fixed_work, &mut cancelled)
+    calculate_model(&calendars, &tasks, anchor, declared_unconstrained_fixed_work, model, &mut cancelled)
 }
 
 fn allocation(
@@ -108,7 +147,47 @@ fn allocation(
     Ok(work)
 }
 
+fn reverse_allocation(
+    calendars: &Calendars,
+    calendar: Option<&str>,
+    finish: i64,
+    duration: u64,
+    ticks: &mut usize,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Result<i64, String> {
+    let mut exhausted = false;
+    let result = calendars.working_start_before_with_budget(calendar, finish, duration, WorkingBudget { max_scanned_days: 4000, max_segments: 8192 }, || {
+        *ticks = ticks.saturating_add(1);
+        if *ticks > TICK_LIMIT {
+            exhausted = true;
+            true
+        } else {
+            cancelled()
+        }
+    });
+    if exhausted {
+        return Err("Schedule preview exhausted its working-time budget".into());
+    }
+    let start = result.map_err(|e| format!("Working-time preview unresolved: {e}"))?;
+    if !(0..project_calendar::UNSPECIFIED_WALLCLOCK).contains(&start) || start % 60 != 0 {
+        return Err("Reverse working-time boundary is outside the supported minute-aligned date range".into());
+    }
+    Ok(start)
+}
+
+#[cfg(test)]
 fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool, cancelled: &mut dyn FnMut() -> bool) -> Result<Preview, String> {
+    calculate_model(calendars, tasks, anchor, declared, ScheduleModel::FsOnly, cancelled)
+}
+
+fn calculate_model(
+    calendars: &Calendars,
+    tasks: &[Task],
+    anchor: i64,
+    declared: bool,
+    model: ScheduleModel,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Result<Preview, String> {
     if !declared {
         return Err("Explicitly declare unconstrained fixed-work tasks; source task kinds and constraints are not certified here".into());
     }
@@ -129,7 +208,7 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
     let mut nodes = BTreeMap::new();
     let mut indegree = BTreeMap::new();
     let mut successors: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut incoming: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+    let mut incoming: BTreeMap<String, Vec<Incoming>> = BTreeMap::new();
     let mut edge_count = 0usize;
     for task in tasks {
         if cancelled() {
@@ -155,13 +234,17 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
     for task in tasks {
         let id = task.guid.to_ascii_lowercase();
         for link in &task.links {
-            if link.type_storage_window != 1 {
+            if model == ScheduleModel::FsOnly && link.type_storage_window != 1 {
                 return Err("Only observed FS storage type 1 is supported in this preview".into());
             }
             let raw = crate::project_model::decode_hex(&link.lag_storage_hex, 8)?;
             let bytes: [u8; 8] = raw.try_into().map_err(|_| "A link lag must contain exactly eight bytes")?;
-            let lag = u64::try_from(i64::from_le_bytes(bytes)).map_err(|_| "Negative-lag scheduling remains unsupported")?;
-            if lag > WORK_LIMIT || lag % 60 != 0 {
+            let lag = i64::from_le_bytes(bytes);
+            if model == ScheduleModel::FsOnly && lag < 0 {
+                return Err("Negative-lag scheduling remains unsupported".into());
+            }
+            let relationship = RELATIONSHIPS.iter().find(|r| r.storage == link.type_storage_window).ok_or("Unobserved relationship storage type")?;
+            if lag.unsigned_abs() > WORK_LIMIT || lag % 60 != 0 {
                 return Err("Link lags must be minute-aligned and at most one million working seconds".into());
             }
             let predecessor = link.predecessor_guid.to_ascii_lowercase();
@@ -169,7 +252,7 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
                 return Err("A link references itself or an absent predecessor".into());
             }
             successors.entry(predecessor.clone()).or_default().push(id.clone());
-            incoming.entry(id.clone()).or_default().push((predecessor, lag));
+            incoming.entry(id.clone()).or_default().push(Incoming { predecessor, lag, relationship });
         }
     }
     let mut ready: BTreeSet<String> = indegree.iter().filter(|(_, n)| **n == 0).map(|(id, _)| id.clone()).collect();
@@ -181,19 +264,27 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
         }
         let task = nodes.get(&id).ok_or("Schedule node disappeared")?;
         let mut earliest = anchor;
+        let calendar = (task.calendar_guid_storage != "00000000-0000-0000-0000-000000000000").then_some(task.calendar_guid_storage.as_str());
         if let Some(links) = incoming.get(&id) {
-            for (pred_id, lag) in links {
-                let predecessor = completed.get(pred_id).ok_or("Predecessor was not scheduled")?;
-                let bound = if *lag == 0 {
-                    predecessor.proposed_finish_wallclock
+            for link in links {
+                let lag = link.lag;
+                let predecessor = completed.get(&link.predecessor).ok_or("Predecessor was not scheduled")?;
+                let source = if link.relationship.source_start { predecessor.proposed_start_wallclock } else { predecessor.proposed_finish_wallclock };
+                let bound = if lag == 0 {
+                    source
+                } else if lag > 0 {
+                    allocation(calendars, Some(&predecessor.effective_calendar_guid), source, lag.unsigned_abs(), &mut ticks, cancelled)?.finish_wallclock
                 } else {
-                    allocation(calendars, Some(&predecessor.effective_calendar_guid), predecessor.proposed_finish_wallclock, *lag, &mut ticks, cancelled)?
-                        .finish_wallclock
+                    reverse_allocation(calendars, Some(&predecessor.effective_calendar_guid), source, lag.unsigned_abs(), &mut ticks, cancelled)?
                 };
-                earliest = earliest.max(bound);
+                let start_bound = if link.relationship.target_finish {
+                    reverse_allocation(calendars, calendar, bound, task.duration_storage_scalar, &mut ticks, cancelled)?
+                } else {
+                    bound
+                };
+                earliest = earliest.max(start_bound);
             }
         }
-        let calendar = (task.calendar_guid_storage != "00000000-0000-0000-0000-000000000000").then_some(task.calendar_guid_storage.as_str());
         let work = allocation(calendars, calendar, earliest, task.duration_storage_scalar, &mut ticks, cancelled)?;
         let start = work.first_work_start_wallclock.ok_or("A positive-duration task has no working interval")?;
         if start % 60 != 0 || work.finish_wallclock % 60 != 0 {
@@ -229,7 +320,8 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
         dates.push(completed.remove(&task.guid.to_ascii_lowercase()).ok_or("A scheduled task disappeared")?);
     }
     Ok(Preview {
-        version: 1,
+        version: if model == ScheduleModel::FsOnly { 1 } else { 2 },
+        relationship_model: (model != ScheduleModel::FsOnly).then_some(model),
         anchor_wallclock: anchor,
         task_count: tasks.len(),
         edge_count,
@@ -239,7 +331,11 @@ fn calculate(calendars: &Calendars, tasks: &[Task], anchor: i64, declared: bool,
         critical_path_calculated: false,
         limitations: vec![
             "Declared unconstrained fixed-work model only; source task kinds and constraints are not certified.",
-            "Planned leaf tasks, FS links and nonnegative working-time lag only; upstream-task calendar policy and minute-aligned inputs.",
+            if model == ScheduleModel::FsOnly {
+                "Planned leaf tasks, FS links and nonnegative working-time lag only; upstream-task calendar policy and minute-aligned inputs."
+            } else {
+                "Declared FS/SS/FF/SF model with signed upstream-calendar lag and backward-normalized target finish boundaries; minute-aligned Planned leaf tasks only."
+            },
             "No source mutation, native rescheduling, utilization coordination, critical paths or baselines are performed.",
             "Calendar conventions retain the source reader's inferred evidence; localized date text and timezone/DST are not interpreted.",
         ],

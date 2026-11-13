@@ -1,7 +1,9 @@
 # Relationship scheduling controls
 
-Observed native build: 6.5.5.28. Production code is unchanged by this study.
-The runtime preview still admits only its declared FS/nonnegative-lag model.
+Observed native build: 6.5.5.28. This native-only study changed no production code.
+The preview was FS/nonnegative-lag only when these controls were collected.
+The later opt-in [declared relationship model](sp-declared-schedule-model.md) uses
+these observations without certifying general native parity.
 General native rescheduling, constraints, calendar overrides and critical paths
 remain separate acceptance gates.
 

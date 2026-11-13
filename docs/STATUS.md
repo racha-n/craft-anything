@@ -6,6 +6,29 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Declared signed relationship preview (R3.14)
+
+The read-only schedule tool retains its default version-1 FS/nonnegative-lag result.
+An explicit `relationship_model: "four_relationships_signed_lag"` request selects
+version 2 with FS/SS/FF/SF and signed upstream-calendar working lag. Bounded reverse
+calendar allocation converts target finish bounds into starts and preserves the
+observed SF overnight working boundary. The two directions share day/exception
+resolution and retain refusal of unresolved inherited policies. This is an explicit
+unconstrained fixed-work model: general native parity, native writing, source
+constraints and critical paths remain unadmitted. See [the model and limits](sp-declared-schedule-model.md).
+
+All thirteen frozen checks pass: formats/analysis/engine all-target tests
+(2,831 passed, 19 ignored), strict clippy, layers, locks, secrets, wasm,
+tools, doctests and formatting; CLI and desktop were rebuilt. Focused suites pass
+8 calendar, 9 scheduling and 2 tool-contract tests. The actual CLI/MCP matches
+all 51 start/finish/duration values in eight previously verified native controls
+(17 tasks), retains two exact default version-1 results and their explicit
+`fs_only` equivalents, and passes 12 refusals across 35 MCP calls. All 57 protected
+inputs stay unchanged. The 845-file source/schema freeze includes four changed
+existing source files and one new module; 840 baseline hashes remain unchanged.
+This comparison reuses the independently collected native observations and adds
+no native round trips or native-parity certification.
+
 ### Controlled relationship scheduling evidence (R3.14)
 
 Eight isolated native controls cover SS/FF/SF and FS lag -1d with an explicitly
@@ -17,9 +40,9 @@ General snapshots match in 697 field comparisons; eleven images were inspected.
 The SF control finishes its successor at Tuesday 17:00 before its predecessor
 starts Wednesday 09:00, with zero working time between those calendar boundaries.
 Source task/link identities, all 57 protected inputs and 844 validated source/schema
-hashes remain unchanged. This study changes no production code: runtime preview
-remains declared FS/nonnegative-lag only, and general native rescheduling stays
-unadmitted. See [the controls and their limits](sp-relationship-scheduling-controls.md).
+hashes remained unchanged during the native-only study. Its production baseline
+was FS/nonnegative-lag only; the later opt-in declared preview is documented above.
+General native rescheduling stays unadmitted. See [the controls and their limits](sp-relationship-scheduling-controls.md).
 
 ### Explicit completed-row export (R3.14)
 
@@ -91,6 +114,8 @@ generated text receipts validated against their version-1 schema. This remains a
 experimental candidate workflow; structural editing and general native Save remain pending. See [the contract and scope](4d5d-completion.md#task-text-storage-candidates).
 
 ### Declared FS earliest-date preview (R3.14)
+
+The original version-1 model remains the default; its original validation follows.
 
 A read-only engine/CLI/MCP tool previews earliest dates using an explicit naive-clock
 anchor and a declared unconstrained fixed-work model. Its limits are 512 Planned leaf

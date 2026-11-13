@@ -157,3 +157,57 @@ fn fs_preview_enforces_shared_working_time_budget() {
     let error = allocation(&calendars(), Some(CAL), ANCHOR, 60, &mut ticks, &mut || false).unwrap_err();
     assert!(error.contains("budget"));
 }
+
+#[test]
+fn expanded_relationships_match_unequal_duration_control_dates() {
+    for (kind, lag, start, finish) in [
+        (3, 0, 1794214800, 1794243600),      // SS: Monday.
+        (4, 0, 1794301200, 1794330000),      // FF: Tuesday.
+        (1, -28800, 1794301200, 1794330000), // FS minus one workday.
+        (1, 0, 1794387600, 1794416400),      // FS: Wednesday.
+        (1, 28800, 1794474000, 1794502800),  // FS plus one: Thursday.
+        (3, -28800, 1794214800, 1794243600), // SS lead is clipped by anchor.
+        (3, 28800, 1794301200, 1794330000),
+        (4, -28800, 1794214800, 1794243600),
+        (4, 28800, 1794387600, 1794416400),
+        (2, -28800, 1794214800, 1794243600),
+        (2, 0, 1794214800, 1794243600),
+        (2, 28800, 1794214800, 1794243600),
+        (2, 57600, 1794301200, 1794330000),
+    ] {
+        let mut a = task("a", &[]);
+        a.duration_storage_scalar = 57600;
+        let mut b = task("b", &[("a", lag)]);
+        b.links[0].type_storage_window = kind;
+        let p = calculate_model(&calendars(), &[b, a], ANCHOR, true, ScheduleModel::FourRelationshipsSignedLag, &mut || false).unwrap();
+        assert_eq!(p.version, 2);
+        assert_eq!((p.tasks[0].proposed_start_wallclock, p.tasks[0].proposed_finish_wallclock), (start, finish));
+        assert!(!p.native_parity_verified);
+        assert!(!p.critical_path_calculated);
+    }
+}
+
+#[test]
+fn active_sf_uses_working_finish_boundary_across_overnight_gap() {
+    let mut root = task("root", &[]);
+    root.duration_storage_scalar = 57600;
+    let middle = task("middle", &[("root", 0)]);
+    let mut last = task("last", &[("middle", 0)]);
+    last.links[0].type_storage_window = 2;
+    let p = calculate_model(&calendars(), &[last, middle, root], ANCHOR, true, ScheduleModel::FourRelationshipsSignedLag, &mut || false).unwrap();
+    assert_eq!(p.tasks[1].proposed_start_wallclock, 1794387600); // Wednesday 09:00.
+    assert_eq!(p.tasks[0].proposed_start_wallclock, 1794301200); // Tuesday 09:00.
+    assert_eq!(p.tasks[0].proposed_finish_wallclock, 1794330000); // Tuesday 17:00.
+}
+
+#[test]
+fn expanded_model_retains_budgets_cancellation_and_unknown_type_refusal() {
+    let mut b = task("b", &[("a", i64::MIN)]);
+    assert!(calculate_model(&calendars(), &[task("a", &[]), b], ANCHOR, true, ScheduleModel::FourRelationshipsSignedLag, &mut || false).is_err());
+    b = task("b", &[("a", 0)]);
+    b.links[0].type_storage_window = 5;
+    assert!(calculate_model(&calendars(), &[task("a", &[]), b], ANCHOR, true, ScheduleModel::FourRelationshipsSignedLag, &mut || false).is_err());
+    assert!(reverse_allocation(&calendars(), Some(CAL), ANCHOR, 60, &mut 0, &mut || true).is_err());
+    let mut ticks = TICK_LIMIT;
+    assert!(reverse_allocation(&calendars(), Some(CAL), ANCHOR, 60, &mut ticks, &mut || false).unwrap_err().contains("budget"));
+}
