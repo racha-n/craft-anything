@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Experimental default Work task creation receipt version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version", "source_sha256", "output_sha256", "admitted_build", "insertion",
+    "default_profile_sha256", "planned_start_wallclock_scalar", "duration_storage_scalar",
+    "task_count_before", "task_count_after", "sections", "internal_reparse_passed",
+    "existing_task_bodies_preserved", "collection_lookup_indices_validated",
+    "collection_lookup_indices_rebuilt", "task_state_definition_validated",
+    "source_supply_chain_identities_validated", "native_transaction_history_reproduced",
+    "native_reopen_verified", "native_row_identity_verified", "derived_schedule_recalculated",
+    "geometry_validated", "constructor_completeness_verified", "limitations"
+  ],
+  "properties": {
+    "version": {"const": 1},
+    "source_sha256": {"$ref": "#/$defs/hash"},
+    "output_sha256": {"$ref": "#/$defs/hash"},
+    "admitted_build": {"const": "6.5.5.28"},
+    "default_profile_sha256": {"const": "616828033f90c1a0c824a4ced3f41aae005e7f65765e6ca5af791686ad5a7642"},
+    "planned_start_wallclock_scalar": {"type": "integer", "minimum": 0, "maximum": 32535244798},
+    "duration_storage_scalar": {"const": 28800},
+    "task_count_before": {"type": "integer", "minimum": 1, "maximum": 511},
+    "task_count_after": {"type": "integer", "minimum": 2, "maximum": 512},
+    "insertion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["template_task_guid", "anchor_task_guid", "expected_parent_guid", "expected_sibling_index", "task_guid", "supply_chain_id", "name", "display_id"],
+      "properties": {
+        "template_task_guid": {"$ref": "#/$defs/guid"},
+        "anchor_task_guid": {"$ref": "#/$defs/guid"},
+        "expected_parent_guid": {"anyOf": [{"$ref": "#/$defs/guid"}, {"type": "null"}]},
+        "expected_sibling_index": {"type": "integer", "minimum": 0, "maximum": 510},
+        "task_guid": {"$ref": "#/$defs/guid"},
+        "supply_chain_id": {"$ref": "#/$defs/guid"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "display_id": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "sections": {
+      "type": "array", "minItems": 48, "maxItems": 48,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "source_stored_sha256", "output_stored_sha256", "stored_bytes_preserved"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 40},
+          "source_stored_sha256": {"$ref": "#/$defs/hash"},
+          "output_stored_sha256": {"$ref": "#/$defs/hash"},
+          "stored_bytes_preserved": {"type": "boolean"}
+        }
+      }
+    },
+    "internal_reparse_passed": {"const": true},
+    "existing_task_bodies_preserved": {"const": true},
+    "collection_lookup_indices_validated": {"const": true},
+    "collection_lookup_indices_rebuilt": {"const": true},
+    "task_state_definition_validated": {"const": true},
+    "source_supply_chain_identities_validated": {"const": true},
+    "native_transaction_history_reproduced": {"const": false},
+    "native_reopen_verified": {"const": false},
+    "native_row_identity_verified": {"const": false},
+    "derived_schedule_recalculated": {"const": false},
+    "geometry_validated": {"const": false},
+    "constructor_completeness_verified": {"const": false},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "guid": {"type": "string", "pattern": "^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"}
+  }
+}

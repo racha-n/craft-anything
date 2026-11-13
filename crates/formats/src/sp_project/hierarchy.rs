@@ -118,6 +118,20 @@ fn groups(tasks: &[Task]) -> Groups<'_> {
     }
     result
 }
+pub(super) fn verify_retained_bodies(before: &[u8], old: &[Task], after: &[u8], new: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<()> {
+    let a = spans(before, old, &groups(old))?;
+    let b = spans(after, new, &groups(new))?;
+    for task in old {
+        check(callback, 0.8)?;
+        let retained = writer::task_for(new, &task.guid)?;
+        let old_span = a.get(task.guid.as_str()).ok_or_else(|| fail("invalid_identity", "Source task body missing"))?;
+        let new_span = b.get(task.guid.as_str()).ok_or_else(|| fail("invalid_output", "Retained task body missing"))?;
+        if task.parent_guid != retained.parent_guid || body_parts(before, task, old_span)? != body_parts(after, retained, new_span)? {
+            return Err(fail("invalid_output", "An existing task parent or body changed"));
+        }
+    }
+    Ok(())
+}
 fn spans<'a>(data: &[u8], tasks: &'a [Task], groups: &Groups<'a>) -> Result<BTreeMap<&'a str, Span>> {
     let mut result = BTreeMap::new();
     for task in tasks {

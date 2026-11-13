@@ -46,7 +46,7 @@ pub struct TextCandidate {
     pub receipt: TextReceipt,
 }
 
-fn encode(value: &str) -> Result<Vec<u8>> {
+pub(super) fn encode(value: &str) -> Result<Vec<u8>> {
     // Bound UTF-8 before scanning or allocating UTF-16 for hostile requests.
     if value.len() > 65_536 || value.contains('\0') {
         return Err(fail("unsupported_value", "Task text must be bounded and contain no NUL"));

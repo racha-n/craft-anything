@@ -10,7 +10,7 @@ use crate::{
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
-use craft_anything_formats::sp_project::{hierarchy, mixed, ordered, relocation, structured};
+use craft_anything_formats::sp_project::{creation, hierarchy, mixed, ordered, relocation, structured};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -63,6 +63,15 @@ struct HierarchyRequest {
     output_path: String,
     acknowledge_storage_only: bool,
     relocation: hierarchy::Reparent,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CreationRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    insertion: creation::InsertAbove,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -170,6 +179,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<StructuredRequest>,
             run_structured,
+        ),
+        spec(
+            "formats_project_sp_task_create_candidate_write",
+            "Write an experimental default Work task candidate",
+            "Insert one default Planned Work leaf above an existing Work leaf, using an exact source hash, guarded parent/position, validated default body/state/calendar and distinct task/Supply Chain identities. Require explicit name/display ID, preserve other sections and publish a version-1 receipt. Native transaction history and generic native saving remain unverified.",
+            "Create a separate test copy with one new one-day task, then validate all affected rows in the source application.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<CreationRequest>,
+            run_creation,
         ),
     ]
 }
@@ -335,6 +355,38 @@ fn run_hierarchy(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolErr
     Ok(ToolOutput::evidence(evidence))
 }
 
+fn run_creation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: CreationRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = creation::candidate(&input.bytes, &p.expected_source_sha256, &p.insertion, |progress| {
+        ctx.report(Some(progress), "Preparing experimental default Work task candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted default Work task creation candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_task_create_candidate_write", input.subject, params)
+        .summary("Prepared an experimental default Work task candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new("native_persistence_unverified", "Default-body/state/calendar, retained task bodies and lookup entries passed internal checks. Native persistence, geometry and scheduling need independent acceptance."))
+        .limitation(Limitation::new("native_transaction_not_reproduced", "Only Tasks changes; transaction, thumbnail and presentation history are preserved. Automatic display IDs and task deletion are not supported."))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 pub(super) fn run_structured(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: StructuredRequest = parse_params(params.clone())?;
     if !p.acknowledge_storage_only {
@@ -469,6 +521,25 @@ mod tests {
         let call = |params| engine.call("formats_project_sp_task_hierarchy_candidate_write", params, CallOptions::new(Caller::Cli));
         assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
         request["acknowledge_storage_only"] = json!(true);
+        assert!(call(request).is_err());
+        assert!(!output.exists());
+        assert!(!output.with_extension("sp.receipt.json").exists());
+    }
+    #[test]
+    fn task_creation_requires_acknowledgement_and_valid_source_without_publishing() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("created.sp");
+        let engine = Engine::new(crate::testing::session());
+        let mut request = json!({"path":dir.path().join("absent.sp"),"expected_source_sha256":"0".repeat(64),
+            "output_path":output,"acknowledge_storage_only":false,
+            "insertion":{"template_task_guid":"11111111-1111-1111-1111-111111111111", "anchor_task_guid":"11111111-1111-1111-1111-111111111111",
+                "expected_parent_guid":null,"expected_sibling_index":0,"task_guid":"22222222-2222-2222-2222-222222222222",
+                "supply_chain_id":"33333333-3333-3333-3333-333333333333","name":"New task","display_id":"NEW-1"}});
+        let call = |params| engine.call("formats_project_sp_task_create_candidate_write", params, CallOptions::new(Caller::Cli));
+        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+        request["acknowledge_storage_only"] = json!(true);
+        assert!(call(request.clone()).is_err());
+        request["insertion"]["unknown"] = json!(true);
         assert!(call(request).is_err());
         assert!(!output.exists());
         assert!(!output.with_extension("sp.receipt.json").exists());

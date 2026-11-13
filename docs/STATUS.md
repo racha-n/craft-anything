@@ -250,9 +250,27 @@ Creation plus renaming also changes the native state index, transaction identity
 presentation/thumbnail sections. Automatic display-ID generation and general
 transaction/deletion rules remain unresolved. Tasks-only diagnostic prototypes match
 the control task bytes and preserve all 47 other sections; their all-task native
-acceptance is pending. No production creation/deletion capability, geometry-creation
-coverage or generic native Save admission is added. See
+acceptance passed with 972 General comparisons. The production candidate below
+passed a fresh native run because its compressed container differs. No deletion,
+geometry-creation coverage or generic native Save admission is added. See
 [the constructor boundary](4d5d-completion.md#default-task-constructor-controls).
+
+### Default Work storage candidate (R3.14)
+
+A new headless tool inserts one default one-day Work leaf above an existing leaf,
+with source/parent/index guards, independent task/Supply Chain identities, explicit
+display ID, complete default-body fingerprint, admitted default calendar and Planned
+state definition. Existing task bodies and other 47 sections are preserved; lookup
+vectors are rebuilt. Ten focused format cases pass, including the 512-output limit.
+Three actual CLI cases passed receipt/schema/control-byte checks and fifteen refusal
+cases left no new publication or replacement. All twelve frozen checks passed, with
+2,529 formats/engine target tests (19 ignored), strict clippy, layers, locks, staged
+secrets, generated tools, wasm, doctests and formatting. The three actual CLI
+containers passed native Save As/unload/reopen and 972 complete General comparisons
+across all four tasks. Three native images were inspected and protected57 hashes
+were unchanged. The desktop was not rebuilt for this headless change. Shared draft/UI creation, associated
+source tasks, geometry-bearing creation, deletion and generic native Save remain
+pending. See [the candidate contract](4d5d-completion.md#default-work-task-storage-candidate).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

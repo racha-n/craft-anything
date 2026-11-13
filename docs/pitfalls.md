@@ -1,5 +1,12 @@
 # Pitfalls
 
+**A new primary task GUID did not reproduce the native constructor.** A bounded
+clone differed from the independent default task in a separate 16-byte Supply Chain
+identity. Regenerate both identities, check source identity collisions and validate
+the whole default-body profile, including its calendar and Planned state definition
+references. Matching readable task fields alone does not establish constructor or
+transaction-history equivalence.
+
 **A successful accessibility action did not perform a native menu command.** A menu
 default-action acknowledgement left task hierarchy bytes unchanged. A physical click
 on the freshly observed menu item performed the operation. Verify changed application

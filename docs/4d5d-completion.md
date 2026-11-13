@@ -615,6 +615,62 @@ source-owned default body and insert only above an existing Work leaf in the sam
 collection. A Tasks-only storage candidate preserves other sections; it does not
 reproduce native transaction or presentation history. Three diagnostic prototypes
 match the controls' Tasks bytes and preserve all 47 other stored sections; their
-native all-task round-trip acceptance is still pending. General constructor
+all-task native round-trip acceptance passed with 972 General comparisons and three
+inspected images. Current production CLI containers use different compressed bytes,
+so they underwent a fresh native acceptance run, which also passed 972 complete
+General comparisons. General constructor
 completeness, task deletion, native row identity and generic native Save remain
 unadmitted. Shared draft/UI creation requires a separately claimed implementation.
+
+## Default Work task storage candidate
+
+`formats_project_sp_task_create_candidate_write` inserts one new Planned Work leaf
+above an existing Work leaf in its current root or nonempty child collection.
+Callers acknowledge storage-only generation and supply an exact source SHA-256,
+template/anchor GUIDs, expected anchor parent/index, distinct nonzero task/Supply
+Chain UUIDs, name and display ID. Names use the existing bounded UTF-16 codec;
+display IDs are limited to 256 UTF-16 units and must be nonempty and unique under
+exact/ASCII-insensitive comparison. Automatic display-ID generation is not used.
+
+The source must have 1..511 Planned tasks without assignments, links, costs,
+progress, codes or user values, valid collection lookup vectors and canonical
+child framing. Source task GUIDs and Supply Chain IDs must be nonzero; Supply Chain
+IDs must be unique and separate from task GUIDs. Both template and anchor must be
+leaves matching the complete observed default-body fingerprint after excluding only
+explicitly replaced fields and separately validated calendar/state references.
+The tail reference must resolve to kind 1 in the three observed Task States
+definitions; the independently checked native General value is Planned. Unknown
+state layouts or body fields reject rather than being copied into a new task.
+
+Both leaves must use the explicit default project calendar, with Monday-Friday
+09:00-17:00 work, nonworking weekends, no inherited weekdays or date exceptions.
+The anchor must start at 09:00 on an admitted working weekday. The new task takes
+that stored start and a fixed 28,800-unit duration, including when its anchor lasts
+two days. No dependency scheduling, arbitrary destination or empty-list constructor
+is added. Existing task bodies/parents/preorder are retained; the containing count
+and collection GUID lookup vectors are rebuilt, then the result is reparsed.
+Tasks stays within 16 MiB, output at most 512 tasks and the container at most 256 MiB.
+Cancellation, checked ranges and allocation budgets apply throughout.
+
+All 47 other stored sections remain byte-identical. Native transaction, thumbnail
+and presentation history are retained rather than reproduced. The standalone
+[version-1 receipt](schemas/sp-task-create-candidate-receipt-v1.schema.json) records
+the source/output hashes, request, profile, counts, section guards and independent
+false native-reopen/row-identity/transaction/schedule/geometry/completeness flags.
+The headless tool publishes the candidate and receipt without replacing existing
+files. It is Deep-only by default and does not open application dialogs.
+
+Validation: ten focused format cases pass, covering root/child insertion,
+nonidentity lookup order, independent identities, source identity failures, state
+and calendar rejection, extended Unicode, stale guards, cancellation and the
+511-to-512 task boundary. Three CLI cases pass their schemas and match native
+control Tasks bytes, with all 47 other sections preserved; fifteen refusal cases
+leave no new publication or replacement. All twelve frozen checks passed: CLI/xtask build, focused tests, 2,529 formats/engine
+all-target tests (19 ignored), strict clippy, layers, locks, staged secrets, generated
+tools, wasm, doctests and formatting. All three actual CLI containers passed native
+Save As/unload/reopen and all four complete General dictionaries before/after
+(972 comparisons), retaining exact Tasks bytes and candidate/receipt hashes. Three
+final native images were inspected; all 57 protected sources remained unchanged.
+The desktop was not rebuilt for this headless change. Shared
+creation draft/history/forms, geometry-bearing creation, deletion, broader task
+construction and generic native Save remain pending.
