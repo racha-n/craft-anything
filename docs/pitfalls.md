@@ -1160,6 +1160,10 @@ before dropping the frame output. Async job tests must mark the worker visible w
 with `Jobs::busy`, which deliberately excludes hidden work.
 `egui_kittest::Node::type_text` queues text events; focus the text field and step first,
 then verify its value before waiting for an enabled submit button.
+An egui ComboBox exposes its selected text as an accessibility value; its popup
+choices expose labels. Inspect the tree and query each control by the field it uses.
+Read generated JSON as UTF-8 explicitly on Windows; the active ANSI code page can
+reject or silently garble non-ASCII receipt values.
 
 
 **A small native window can hide a planning pane.** Resizing the native planning app

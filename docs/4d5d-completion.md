@@ -362,3 +362,48 @@ builds, 2,485 formats/engine target tests (19 ignored), all-target clippy, layer
 locks, secrets, tools, wasm, doctests and formatting. Nested synthetic cases preserve
 complete descendant subtrees and opaque tails; stale identity/position, cancellation,
 linked tasks and valid sources exceeding the 512-task budget are refused.
+
+## Shared field and task-order drafts
+
+The ordered draft pipeline extends existing scalar/text history with at most eight
+sequential same-parent order operations and 256 fields/operations combined. Each move
+guards the current task GUID, parent and sibling position. Field expectations remain
+bound to the original source; moves run after the field stages and bind to the prior
+intermediate hash. A version-3 receipt retains the original version-2 mixed receipt
+and every version-1 order receipt. Consumers must check the complete hash chain.
+The standalone headless tool is `formats_project_sp_ordered_candidate_write`;
+draft export selects it when order operations remain.
+Existing scalar-only and text-containing exports retain their version-1/version-2
+contracts whenever the draft has no remaining order operations.
+
+Shared history remains bounded to 64 transactions and 16 MiB of retained edit payload.
+Apply validates the current revision and the complete merged state before publishing
+history. Undo/redo and branching include field and order changes together. No-op moves
+do not consume the operation budget; returning every task to its source order clears
+the order log while preserving undo history. Candidate export rereads and hash-checks
+the original source and publishes new files without replacement.
+
+The draft form shows one-based positions among siblings. Earlier/Later adjusts a
+pending position; Apply combines it with changed labels and the current scalar page.
+Shared typed admission disables ordering for unsupported sources while preserving
+their field forms. Sibling positions cover the full source, independently of the
+100-task display page. Apply/undo/redo can focus a GUID and return its new page; the
+form retains selected-task identity across reordering. The original viewport and
+source-keyed caches stay isolated. General hierarchy movement and native Save remain
+separate acceptance gates; generic native and derived-schedule flags remain false.
+
+Frozen validation passed all 11 checks, including main/CLI/check-tool builds, seven
+form/widget regressions, 2,731 formats/engine/UI target tests (25 ignored), all-target
+clippy, layers, locks, secrets, tools, wasm, doctests and formatting. Focused cases
+cover atomic rollback, inverse-order normalization, the eight-operation budget,
+cancellation, branching and GUID focus across 130 tasks. Both layouts' Unicode
+offscreen images were inspected; their source freeze equals the full validation
+freeze. Version-2/version-3 widget receipts passed their schemas and hash-chain checks.
+
+The latest CLI candidate combined duration, Unicode name, display ID and one sibling
+move. Tasks and typed task pages exactly matched an independent native UI control;
+all 47 other stored sections stayed equal to the source. Native Save/unload/reopen
+preserved Tasks, the modified task's complete observed General values and the unchanged
+task's baseline values. The native screenshot was inspected, and candidate/receipt bytes
+plus 57 protected source hashes stayed unchanged. This is one Planned unassigned
+two-root case; general native saving and structural authoring remain unadmitted.

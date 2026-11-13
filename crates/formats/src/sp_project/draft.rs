@@ -1,6 +1,6 @@
-//! Bounded source-bound scalar/text draft history. Native acceptance remains separate.
+//! Bounded source-bound field/order draft history. Native acceptance remains separate.
 use super::{
-    FormatError, mixed, parse_metadata,
+    FormatError, mixed, ordered, parse_metadata, relocation,
     task_strings::TextEdit,
     writer::{self, ScalarEdit},
 };
@@ -11,6 +11,7 @@ const HISTORY_PAYLOAD_LIMIT: usize = 16 * 1024 * 1024;
 struct Version {
     scalars: Vec<ScalarEdit>,
     texts: Vec<TextEdit>,
+    orders: Vec<relocation::Move>,
     payload_bytes: usize,
 }
 #[derive(Clone)]
@@ -37,13 +38,16 @@ impl Draft {
         self.versions.get(self.cursor).map(|v| v.texts.as_slice()).unwrap_or_default()
     }
     pub fn edit_count(&self) -> usize {
-        self.edits().len().saturating_add(self.text_edits().len())
+        self.edits().len().saturating_add(self.text_edits().len()).saturating_add(self.order_edits().len())
+    }
+    pub fn order_edits(&self) -> &[relocation::Move] {
+        self.versions.get(self.cursor).map(|v| v.orders.as_slice()).unwrap_or_default()
     }
     pub fn can_undo(&self) -> bool {
         self.cursor > 0
     }
     pub fn is_dirty(&self) -> bool {
-        !self.edits().is_empty() || !self.text_edits().is_empty()
+        !self.edits().is_empty() || !self.text_edits().is_empty() || !self.order_edits().is_empty()
     }
     pub fn can_redo(&self) -> bool {
         self.cursor.checked_add(1).is_some_and(|n| n < self.versions.len())
@@ -55,11 +59,20 @@ impl Draft {
         self.revision.checked_add(1).ok_or_else(|| "Draft revision exhausted".into())
     }
     pub fn candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<mixed::Candidate, String> {
+        if !self.order_edits().is_empty() {
+            return Err("This draft has task-order changes; export its version-3 ordered candidate".into());
+        }
         mixed::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), keep).map_err(error)
+    }
+    pub fn ordered_candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<ordered::Candidate, String> {
+        ordered::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.order_edits(), keep).map_err(error)
     }
     pub fn bytes(&self, keep: impl FnMut(f32) -> bool) -> Result<Vec<u8>, String> {
         if !self.is_dirty() {
             return Ok(self.original.to_vec());
+        }
+        if !self.order_edits().is_empty() {
+            return self.ordered_candidate(keep).map(|v| v.bytes);
         }
         if self.text_edits().is_empty() {
             return writer::candidate(&self.original, &self.source_sha256, self.edits(), keep).map(|v| v.bytes).map_err(error);
@@ -69,9 +82,19 @@ impl Draft {
     pub fn apply(&mut self, revision: u64, edits: &[ScalarEdit], keep: impl FnMut(f32) -> bool) -> Result<(), String> {
         self.apply_mixed(revision, edits, &[], keep)
     }
-    pub fn apply_mixed(&mut self, revision: u64, edits: &[ScalarEdit], texts: &[TextEdit], mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+    pub fn apply_mixed(&mut self, revision: u64, edits: &[ScalarEdit], texts: &[TextEdit], keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+        self.apply_ordered(revision, edits, texts, &[], keep)
+    }
+    pub fn apply_ordered(
+        &mut self,
+        revision: u64,
+        edits: &[ScalarEdit],
+        texts: &[TextEdit],
+        orders: &[relocation::Move],
+        mut keep: impl FnMut(f32) -> bool,
+    ) -> Result<(), String> {
         let next = self.check_revision(revision)?;
-        if edits.is_empty() && texts.is_empty() {
+        if edits.is_empty() && texts.is_empty() && orders.is_empty() {
             return Err("Choose at least one draft edit".into());
         }
         if self.cursor >= 64 {
@@ -80,7 +103,7 @@ impl Draft {
         let current = self.bytes(&mut keep)?;
         let parsed = parse_metadata(&current, &mut keep).map_err(error)?;
         // Validate current expectations atomically, including all cross-kind field limits.
-        validate(&current, &parsed.source_sha256, edits, texts, &mut keep)?;
+        validate(&current, &parsed.source_sha256, edits, texts, orders, &mut keep)?;
         let mut scalars = self.edits().to_vec();
         for edit in edits {
             let key = identity(edit);
@@ -101,7 +124,20 @@ impl Draft {
             }
         }
         merged_texts.retain(|edit| !unchanged_text(edit));
-        let payload_bytes = payload_cost(&scalars, &merged_texts)?;
+        let mut merged_orders = self.order_edits().to_vec();
+        merged_orders.extend(orders.iter().filter(|m| m.expected_sibling_index != m.sibling_index).cloned());
+        // Validate the complete baseline-relative sequence before publishing history.
+        if !merged_orders.is_empty() {
+            let candidate = ordered::candidate(&self.original, &self.source_sha256, &scalars, &merged_texts, &merged_orders, &mut keep).map_err(error)?;
+            if order_ids(&candidate.bytes, &mut keep)? == order_ids(&self.original, &mut keep)? {
+                merged_orders.clear();
+            }
+        } else {
+            validate(&self.original, &self.source_sha256, &scalars, &merged_texts, &[], &mut keep)?;
+        }
+        let payload_bytes = payload_cost(&scalars, &merged_texts)?
+            .checked_add(merged_orders.len().checked_mul(1024).ok_or_else(|| "Draft order payload size overflow".to_owned())?)
+            .ok_or_else(|| "Draft payload size overflow".to_owned())?;
         let retained = self
             .versions
             .iter()
@@ -111,10 +147,8 @@ impl Draft {
         if retained.checked_add(payload_bytes).is_none_or(|n| n > HISTORY_PAYLOAD_LIMIT) {
             return Err("Draft history exceeds the 16 MiB edit-payload budget; export before starting another draft".into());
         }
-        // Validate baseline expectations and total fields before replacing any history or revision.
-        validate(&self.original, &self.source_sha256, &scalars, &merged_texts, &mut keep)?;
         self.versions.truncate(self.cursor + 1);
-        self.versions.push(Arc::new(Version { scalars, texts: merged_texts, payload_bytes }));
+        self.versions.push(Arc::new(Version { scalars, texts: merged_texts, orders: merged_orders, payload_bytes }));
         self.cursor += 1;
         self.revision = next;
         Ok(())
@@ -138,12 +172,32 @@ impl Draft {
         Ok(())
     }
 }
-fn validate(raw: &[u8], hash: &str, scalars: &[ScalarEdit], texts: &[TextEdit], keep: &mut dyn FnMut(f32) -> bool) -> Result<(), String> {
-    if texts.is_empty() {
+fn validate(
+    raw: &[u8],
+    hash: &str,
+    scalars: &[ScalarEdit],
+    texts: &[TextEdit],
+    orders: &[relocation::Move],
+    keep: &mut dyn FnMut(f32) -> bool,
+) -> Result<(), String> {
+    if !orders.is_empty() {
+        ordered::candidate(raw, hash, scalars, texts, orders, keep).map(|_| ()).map_err(error)
+    } else if texts.is_empty() {
         writer::candidate(raw, hash, scalars, keep).map(|_| ()).map_err(error)
     } else {
         mixed::candidate(raw, hash, scalars, texts, keep).map(|_| ()).map_err(error)
     }
+}
+fn order_ids(raw: &[u8], keep: &mut dyn FnMut(f32) -> bool) -> Result<Vec<String>, String> {
+    let parsed = parse_metadata(raw, keep).map_err(error)?;
+    parsed
+        .metadata
+        .get("tasks")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Draft task inventory missing".to_owned())?
+        .iter()
+        .map(|t| t.get("guid").and_then(serde_json::Value::as_str).map(str::to_owned).ok_or_else(|| "Draft task identity missing".to_owned()))
+        .collect()
 }
 fn text_identity(edit: &TextEdit) -> String {
     match edit {

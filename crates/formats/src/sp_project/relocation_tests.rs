@@ -96,6 +96,7 @@ fn refuses_linked_tasks_and_valid_sources_exceeding_the_task_budget() {
     let linked = project_with_tasks(empty_section(), linked_tasks);
     assert!(parse_metadata(&linked, |_| true).is_ok());
     let h = writer::hash(&linked, &mut |_| true).unwrap();
+    assert!(matches!(outline(&linked, &h, |_| true).unwrap().reason, Some(ScopeReason::AssociatedOrProgressedTasks)));
     assert!(candidate(&linked, &h, &movement(1, None, 0, 0), |_| true).is_err());
     let mut records = Vec::new();
     for i in 0u16..513 {
@@ -107,5 +108,25 @@ fn refuses_linked_tasks_and_valid_sources_exceeding_the_task_budget() {
     let many = project_with_tasks(empty_section(), section(&records));
     assert_eq!(parse_metadata(&many, |_| true).unwrap().metadata["tasks"].as_array().unwrap().len(), 513);
     let h = writer::hash(&many, &mut |_| true).unwrap();
+    let positions = outline(&many, &h, |_| true).unwrap();
+    assert!(matches!(positions.reason, Some(ScopeReason::TaskLimit)));
+    assert_eq!(positions.positions.len(), 513);
     assert!(candidate(&many, &h, &movement(1, None, 0, 0), |_| true).is_err());
+}
+
+#[test]
+fn outline_reports_complete_parent_positions_and_shared_admission() {
+    let raw = project_with_tasks(empty_section(), section(&[nest(record(1, 77), &[nest(record(2, 12), &[record(4, 99)]), record(3, 333)]), record(5, 555)]));
+    let hash = writer::hash(&raw, &mut |_| true).unwrap();
+    let result = outline(&raw, &hash, |_| true).unwrap();
+    assert!(result.reason.is_none());
+    let rows: Vec<_> = result.positions.iter().map(|p| (p.task_guid.clone(), p.parent_guid.clone(), p.sibling_index, p.sibling_total)).collect();
+    assert_eq!(rows, vec![(id(1), None, 0, 2), (id(2), Some(id(1)), 0, 2), (id(4), Some(id(2)), 0, 1), (id(3), Some(id(1)), 1, 2), (id(5), None, 1, 2)]);
+    assert!(outline(&raw, &"0".repeat(64), |_| true).is_err());
+    assert!(outline(&raw, &hash, |_| false).is_err());
+    let empty = project_with_tasks(empty_section(), empty_section());
+    let hash = writer::hash(&empty, &mut |_| true).unwrap();
+    let result = outline(&empty, &hash, |_| true).unwrap();
+    assert!(matches!(result.reason, Some(ScopeReason::NoTasks)));
+    assert!(result.positions.is_empty());
 }

@@ -2,6 +2,9 @@
 use super::*;
 
 fn metadata_fixture() -> Vec<u8> {
+    metadata_fixture_count(1)
+}
+fn metadata_fixture_count(count: u8) -> Vec<u8> {
     let open = [0x7a, 0x54, 0xaf, 0x39];
     let close = [0x16, 0xe4, 0x99, 0x6f];
     let mut task = vec![0; 29];
@@ -29,8 +32,15 @@ fn metadata_fixture() -> Vec<u8> {
     task[tail + 113..tail + 117].copy_from_slice(&[0x92, 0xd4, 0x70, 0xa2]);
     let mut tasks = vec![0; 24];
     tasks.extend(open);
-    tasks.extend(1u32.to_le_bytes());
-    tasks.extend(task);
+    tasks.extend(u32::from(count).to_le_bytes());
+    for i in 0..count {
+        let mut record = task.clone();
+        record[12..28].fill(0x11 + i);
+        record[77] = b'A' + i;
+        let end = record.len();
+        record[end - 4..].copy_from_slice(&u32::from(i).to_le_bytes());
+        tasks.extend(record);
+    }
     tasks.extend(close);
     let mut empty = vec![0; 24];
     empty.extend(open);
@@ -171,6 +181,10 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         can_undo: revision > 0,
         can_redo: false,
         edit_count: usize::from(revision > 0),
+        order_edit_count: 0,
+        order_edit_limit: ORDER_LIMIT,
+        order_supported: false,
+        order_reason: "Assigned-task ordering remains outside the admitted subset.".into(),
         task_total: 1,
         offset: 0,
         derived_tasks: DerivedPage { items: vec![] },
@@ -178,6 +192,9 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
             guid: "11111111-1111-1111-1111-111111111111".into(),
             name: "Task".into(),
             display_id: "ID1".into(),
+            parent_guid: None,
+            sibling_index: 0,
+            sibling_total: 1,
             planned_start_wallclock_scalar: 100,
             duration_storage_scalar: 86400,
             assignments: vec![
@@ -186,6 +203,131 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
             ],
             direct_costs: vec![],
         }],
+    }
+}
+
+#[test]
+fn reordered_snapshot_preserves_selected_guid_and_rejects_invalid_positions() {
+    let source = "a".repeat(64);
+    let mut initial = snapshot(1, 0);
+    initial.order_supported = true;
+    initial.order_reason.clear();
+    initial.task_total = 2;
+    let mut second = initial.tasks[0].clone();
+    second.guid = "22222222-2222-2222-2222-222222222222".into();
+    second.name = "Second".into();
+    second.sibling_index = 1;
+    second.sibling_total = 2;
+    initial.tasks[0].sibling_total = 2;
+    initial.tasks.push(second);
+    let mut state = State::default();
+    state.accept(initial.clone(), &source, None).unwrap();
+    state.selected = 1;
+    let mut next = initial;
+    next.revision = 1;
+    next.tasks.swap(0, 1);
+    for (i, t) in next.tasks.iter_mut().enumerate() {
+        t.sibling_index = i;
+    }
+    state.accept(next.clone(), &source, Some(1)).unwrap();
+    assert_eq!(state.selected, 0);
+    assert_eq!(state.order_position, 1);
+    assert_eq!(state.labels.name, "Second");
+    next.tasks[0].sibling_total = 0;
+    state.order_position = 2;
+    assert!(state.accept(next, &source, Some(1)).is_err());
+    assert_eq!(state.order_position, 2);
+}
+
+#[test]
+fn widget_order_and_label_edits_share_undo_redo_and_version_three_export() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = metadata_fixture_count(3);
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let panel = DraftPanel::new(engine, path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    h.get_by_value("1 \u{00b7} A").click();
+    h.run();
+    h.get_by_label("1 \u{00b7} B").click();
+    h.run();
+    let selected = h.state().state.snapshot.as_ref().unwrap().tasks[h.state().state.selected].guid.clone();
+    h.get_by_label("Task order").click();
+    h.run();
+    h.get_by_label("Earlier").click();
+    h.run();
+    assert_eq!(h.state().state.order_position, 1);
+    h.get_by_label("Task labels").click();
+    h.run();
+    h.get_by_label("Task name").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    let renamed = "Moved_\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}";
+    h.get_by_label("Task name").type_text(renamed);
+    h.run_steps(2);
+    h.state_mut().state.fields.iter_mut().find(|f| matches!(f.original, ScalarEdit::TaskDuration { .. })).unwrap().text = "42".into();
+    h.run();
+    h.get_by_label("Apply to draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Apply to draft").click();
+    settle(&mut h);
+    let current = h.state().state.snapshot.as_ref().unwrap();
+    assert_eq!(current.edit_count, 3);
+    assert_eq!(current.order_edit_count, 1);
+    assert_eq!(current.tasks[0].guid, selected);
+    assert_eq!(current.tasks[0].name, renamed);
+    assert_eq!(h.state().state.selected, 0);
+    h.get_by_label("Undo").scroll_to_me();
+    h.run();
+    h.get_by_label("Undo").click();
+    settle(&mut h);
+    let restored = h.state().state.snapshot.as_ref().unwrap();
+    assert!(!restored.dirty);
+    assert_eq!(restored.tasks[1].guid, selected);
+    assert_eq!(h.state().state.selected, 1);
+    h.get_by_label("Redo").click();
+    settle(&mut h);
+    assert_eq!(h.state().state.selected, 0);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().tasks[0].guid, selected);
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (name, planning) in [("ordered-draft-studio.png", false), ("ordered-draft-planning.png", true)] {
+            h.state_mut().state.planning = planning;
+            h.run();
+            let image = folder.join(name);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+        }
+    }
+    let output = dir.path().join("ordered.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
+    h.get_by_label("I will validate this experimental candidate in the native application.").click();
+    h.run();
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 3);
+    assert_eq!(receipt["mixed_stage"]["output_sha256"], receipt["order_stages"][0]["source_sha256"]);
+    let parsed = craft_anything_formats::sp_project::parse_metadata(&std::fs::read(output).unwrap(), |_| true).unwrap();
+    assert_eq!(parsed.metadata["tasks"][0]["guid"], selected);
+    assert_eq!(parsed.metadata["tasks"][0]["name"], renamed);
+    assert_eq!(parsed.metadata["tasks"][0]["duration_storage_scalar"], 42);
+    assert_eq!(std::fs::read(path).unwrap(), raw);
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let target = std::path::PathBuf::from(folder).join("ordered-widget-receipt.json");
+        assert!(!target.exists());
+        std::fs::write(target, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
     }
 }
 #[test]

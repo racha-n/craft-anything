@@ -37,6 +37,89 @@ pub struct Candidate {
     pub receipt: Receipt,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeReason {
+    NoTasks,
+    TaskLimit,
+    AssociatedOrProgressedTasks,
+}
+impl ScopeReason {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoTasks => "No tasks are available for reordering.",
+            Self::TaskLimit => "Task order candidates support at most 512 tasks.",
+            Self::AssociatedOrProgressedTasks => "Task ordering requires Planned tasks without assignments, links, costs, progress, codes or user values.",
+        }
+    }
+}
+#[derive(Serialize)]
+pub struct Position {
+    pub task_guid: String,
+    pub parent_guid: Option<String>,
+    pub sibling_index: usize,
+    pub sibling_total: usize,
+}
+pub struct Outline {
+    pub reason: Option<ScopeReason>,
+    pub positions: Vec<Position>,
+}
+fn scope(tasks: &[Task]) -> Option<ScopeReason> {
+    if tasks.is_empty() {
+        return Some(ScopeReason::NoTasks);
+    }
+    if tasks.len() > 512 {
+        return Some(ScopeReason::TaskLimit);
+    }
+    tasks
+        .iter()
+        .any(|t| {
+            t.status_storage_value != 1
+                || !t.assignments.is_empty()
+                || !t.links.is_empty()
+                || !t.direct_costs.is_empty()
+                || !t.progress_records.is_empty()
+                || !t.actual_expense_reports.is_empty()
+                || !t.activity_code_refs.is_empty()
+                || !t.user_values.is_empty()
+        })
+        .then_some(ScopeReason::AssociatedOrProgressedTasks)
+}
+fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> Result<(String, Container)> {
+    if raw.len() > FILE_LIMIT || expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(fail("invalid_identity", "Choose a source up to 256 MiB and its 64-digit SHA-256"));
+    }
+    let hash = writer::hash(raw, callback)?;
+    if !hash.eq_ignore_ascii_case(expected) {
+        return Err(fail("stale_source", "Source changed; reload before reordering tasks"));
+    }
+    Ok((hash, container(raw, callback)?))
+}
+/// Shared admission and complete sibling positions, independent of UI page boundaries.
+pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl FnMut(f32) -> bool) -> std::result::Result<Outline, FormatError> {
+    let result = (|| {
+        let (hash, container) = source(raw, expected_source_sha256, &mut keep_going)?;
+        let evidence = inspect_container(container, hash, false, &mut keep_going)?;
+        let mut totals = BTreeMap::new();
+        for task in &evidence.tasks {
+            let total = totals.entry(task.parent_guid.as_deref()).or_insert(0usize);
+            *total = checked_add(*total, 1)?;
+        }
+        let mut indices = BTreeMap::new();
+        let mut positions = Vec::new();
+        positions.try_reserve_exact(evidence.tasks.len()).map_err(|_| fail("limit", "Task order outline allocation"))?;
+        for task in &evidence.tasks {
+            check(&mut keep_going, 0.9)?;
+            let index = indices.entry(task.parent_guid.as_deref()).or_insert(0usize);
+            let total = totals.get(&task.parent_guid.as_deref()).copied().ok_or_else(|| fail("invalid_identity", "Sibling count missing"))?;
+            positions.push(Position { task_guid: task.guid.clone(), parent_guid: task.parent_guid.clone(), sibling_index: *index, sibling_total: total });
+            *index = checked_add(*index, 1)?;
+        }
+        Ok(Outline { reason: scope(&evidence.tasks), positions })
+    })();
+    result.map_err(format_error)
+}
+
 /// Move one existing task subtree within its sibling list without changing the input.
 pub fn candidate(
     raw: &[u8],
@@ -48,33 +131,11 @@ pub fn candidate(
 }
 
 fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f32) -> bool) -> Result<Candidate> {
-    if raw.len() > FILE_LIMIT || expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(fail("invalid_identity", "Choose a source up to 256 MiB and its 64-digit SHA-256"));
-    }
-    let source_hash = writer::hash(raw, callback)?;
-    if !source_hash.eq_ignore_ascii_case(expected) {
-        return Err(fail("stale_source", "Source changed; reload before reordering tasks"));
-    }
-    let source = container(raw, callback)?;
+    let (source_hash, source) = source(raw, expected, callback)?;
     let data = source.decoded.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?.clone();
     let evidence = inspect_container(source, source_hash.clone(), false, callback)?;
-    if evidence.tasks.len() > 512 {
-        return Err(fail("limit", "Task order candidates support at most 512 tasks"));
-    }
-    if evidence.tasks.iter().any(|t| {
-        t.status_storage_value != 1
-            || !t.assignments.is_empty()
-            || !t.links.is_empty()
-            || !t.direct_costs.is_empty()
-            || !t.progress_records.is_empty()
-            || !t.actual_expense_reports.is_empty()
-            || !t.activity_code_refs.is_empty()
-            || !t.user_values.is_empty()
-    }) {
-        return Err(fail(
-            "unsupported_layout",
-            "Task order candidates require Planned tasks without assignments, links, costs, progress, codes or user values",
-        ));
+    if let Some(reason) = scope(&evidence.tasks) {
+        return Err(fail(if matches!(reason, ScopeReason::TaskLimit) { "limit" } else { "unsupported_layout" }, reason.message()));
     }
     let task = writer::task_for(&evidence.tasks, &request.task_guid)?;
     let parent = request.expected_parent_guid.as_deref().map(|id| writer::task_for(&evidence.tasks, id).map(|t| t.guid.clone())).transpose()?;

@@ -10,7 +10,7 @@ use crate::{
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
-use craft_anything_formats::sp_project::{mixed, relocation};
+use craft_anything_formats::sp_project::{mixed, ordered, relocation};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,6 +54,20 @@ struct RelocationRequest {
     output_path: String,
     acknowledge_storage_only: bool,
     relocation: relocation::Move,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct OrderedRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    #[serde(default)]
+    edits: Vec<ScalarEdit>,
+    #[serde(default)]
+    text_edits: Vec<TextEdit>,
+    #[serde(default)]
+    order_edits: Vec<relocation::Move>,
 }
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -100,6 +114,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<RelocationRequest>,
             run_relocation,
+        ),
+        spec(
+            "formats_project_sp_ordered_candidate_write",
+            "Write an experimental ordered SP candidate",
+            "Compose guarded numeric/text edits and up to eight sequential same-parent task-order operations in a separate project copy. Publish a version-3 receipt retaining prior stage receipts and their hash chain. Native saving and schedule coordination remain unverified.",
+            "Export a separate test copy containing changed fields and task order, then validate it in the source application.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<OrderedRequest>,
+            run_ordered,
         ),
     ]
 }
@@ -220,6 +245,40 @@ fn run_relocation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolEr
         .limitation(Limitation::new(
             "native_persistence_unverified",
             "Internal reparse and subtree preservation passed; native acceptance and schedule coordination remain unverified.",
+        ))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
+pub(super) fn run_ordered(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: OrderedRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = ordered::candidate(&input.bytes, &p.expected_source_sha256, &p.edits, &p.text_edits, &p.order_edits, |progress| {
+        ctx.report(Some(progress), "Preparing experimental ordered SP candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted ordered candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_ordered_candidate_write", input.subject, params)
+        .summary("Prepared an experimental ordered SP candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new(
+            "native_persistence_unverified",
+            "Internal field and task-order reparses passed; native saving and schedule coordination remain unverified.",
         ))
         .target_content(true)
         .build()?;

@@ -9,7 +9,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::ToolError;
-use craft_anything_formats::sp_project::{self, draft::Draft, task_strings::TextEdit, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{self, draft::Draft, relocation, task_strings::TextEdit, writer::ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -50,16 +50,24 @@ enum Request {
         edits: Vec<ScalarEdit>,
         #[serde(default)]
         text_edits: Vec<TextEdit>,
+        #[serde(default)]
+        order_edits: Vec<relocation::Move>,
+        #[serde(default)]
+        focus_task_guid: Option<String>,
     },
     Undo {
         draft_id: u64,
         expected_source_sha256: String,
         revision: u64,
+        #[serde(default)]
+        focus_task_guid: Option<String>,
     },
     Redo {
         draft_id: u64,
         expected_source_sha256: String,
         revision: u64,
+        #[serde(default)]
+        focus_task_guid: Option<String>,
     },
     Close {
         draft_id: u64,
@@ -80,7 +88,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound scalar/text draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. Does not admit native saving or rescheduling.",
+        "Open a source-bound field/order draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. At most eight sibling-order operations; no native saving or rescheduling admission.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -92,6 +100,7 @@ pub fn specs() -> Vec<ToolSpec> {
 fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let request: Request = parse_params(params)?;
     let mut offset = 0;
+    let mut focus = None;
     let mut session = match &request {
         Request::Open { path, expected_source_sha256 } => {
             if ctx.session.ext.get::<EditSession>().is_some_and(|s| s.draft.is_dirty()) {
@@ -113,8 +122,8 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             let (id, expected, revision) = match &request {
                 Request::Inspect { draft_id, expected_source_sha256, revision, .. }
                 | Request::Apply { draft_id, expected_source_sha256, revision, .. }
-                | Request::Undo { draft_id, expected_source_sha256, revision }
-                | Request::Redo { draft_id, expected_source_sha256, revision }
+                | Request::Undo { draft_id, expected_source_sha256, revision, .. }
+                | Request::Redo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Close { draft_id, expected_source_sha256, revision, .. }
                 | Request::WriteCandidate { draft_id, expected_source_sha256, revision, .. } => (draft_id, expected_source_sha256, Some(*revision)),
                 Request::Refresh { draft_id, expected_source_sha256, .. } => (draft_id, expected_source_sha256, None),
@@ -140,13 +149,28 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             ctx.session.ext.remove::<EditSession>();
             return Ok(ToolOutput::Value(json!({"version":1,"draft_id":session.id,"closed":true})));
         }
-        Request::Apply { revision, edits, text_edits, .. } => {
-            session.draft.apply_mixed(revision, &edits, &text_edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?
+        Request::Apply { revision, edits, text_edits, order_edits, focus_task_guid, .. } => {
+            session.draft.apply_ordered(revision, &edits, &text_edits, &order_edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            focus = focus_task_guid;
         }
-        Request::Undo { revision, .. } => session.draft.undo(revision).map_err(ToolError::invalid)?,
-        Request::Redo { revision, .. } => session.draft.redo(revision).map_err(ToolError::invalid)?,
+        Request::Undo { revision, focus_task_guid, .. } => {
+            session.draft.undo(revision).map_err(ToolError::invalid)?;
+            focus = focus_task_guid;
+        }
+        Request::Redo { revision, focus_task_guid, .. } => {
+            session.draft.redo(revision).map_err(ToolError::invalid)?;
+            focus = focus_task_guid;
+        }
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
+            if !session.draft.order_edits().is_empty() {
+                return project_candidate_tools::run_ordered(
+                    ctx,
+                    json!({"path":session.path,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,
+                        "acknowledge_storage_only":acknowledge_storage_only,"edits":session.draft.edits(),"text_edits":session.draft.text_edits(),
+                        "order_edits":session.draft.order_edits()}),
+                );
+            }
             if !session.draft.text_edits().is_empty() {
                 return project_candidate_tools::run_mixed(
                     ctx,
@@ -170,10 +194,42 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         return Err(ToolError::cancelled());
     }
     let tasks = imported.metadata.get("tasks").and_then(Value::as_array).ok_or_else(|| ToolError::invalid("Draft task inventory is missing."))?;
+    if let Some(id) = focus {
+        if id.len() != 36 {
+            return Err(ToolError::invalid("Choose a source task GUID for draft focus."));
+        }
+        let index = tasks
+            .iter()
+            .position(|t| t.get("guid").and_then(Value::as_str).is_some_and(|v| v.eq_ignore_ascii_case(&id)))
+            .ok_or_else(|| ToolError::invalid("Focused task is absent from this draft."))?;
+        offset = index / 100 * 100;
+    }
+    let outline = relocation::outline(&raw, &imported.source_sha256, |_| !ctx.cancel.is_cancelled());
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let outline = outline.map_err(|e| format_err(e, "draft task-order admission"))?;
+    let positions: std::collections::BTreeMap<_, _> = outline.positions.iter().map(|p| (p.task_guid.as_str(), p)).collect();
+    let page = tasks
+        .iter()
+        .skip(offset)
+        .take(100)
+        .map(|t| {
+            let id = t.get("guid").and_then(Value::as_str).ok_or_else(|| ToolError::invalid("Draft task identity missing."))?;
+            let position = positions.get(id).ok_or_else(|| ToolError::invalid("Draft sibling position missing."))?;
+            let mut row = t.clone();
+            let object = row.as_object_mut().ok_or_else(|| ToolError::invalid("Draft task record missing."))?;
+            object.insert("sibling_index".into(), json!(position.sibling_index));
+            object.insert("sibling_total".into(), json!(position.sibling_total));
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>, ToolError>>()?;
     let result = json!({"version":1,"draft_id":session.id,"source_sha256":session.draft.source_sha256,"draft_sha256":imported.source_sha256,
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
-        "tasks":tasks.iter().skip(offset).take(100).collect::<Vec<_>>(),"derived_tasks":model.page_tasks(offset,100),
+        "order_edit_count":session.draft.order_edits().len(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
+        "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
+        "tasks":page,"derived_tasks":model.page_tasks(offset,100),
         "native_reopen_verified":false,"derived_schedule_consistency_verified":false});
     ctx.session.ext.insert(Arc::new(DraftSequence(session.id)));
     ctx.session.ext.insert(Arc::new(session));
@@ -187,6 +243,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     fn fixture() -> Vec<u8> {
+        fixture_count(1)
+    }
+    fn fixture_count(count: u8) -> Vec<u8> {
         let open = [0x7a, 0x54, 0xaf, 0x39];
         let close = [0x16, 0xe4, 0x99, 0x6f];
         let mut task = vec![0; 29];
@@ -214,8 +273,14 @@ mod tests {
         task[tail + 113..tail + 117].copy_from_slice(&[0x92, 0xd4, 0x70, 0xa2]);
         let mut section = vec![0; 24];
         section.extend(open);
-        section.extend(1u32.to_le_bytes());
-        section.extend(task);
+        section.extend(u32::from(count).to_le_bytes());
+        for i in 0..count {
+            let mut row = task.clone();
+            row[12..28].fill(0x11 + i);
+            let end = row.len();
+            row[end - 4..].copy_from_slice(&u32::from(i).to_le_bytes());
+            section.extend(row);
+        }
         section.extend(close);
         let mut raw = super::super::scene_project_tools::tests::empty_metadata_project();
         let old_end = u64::from_le_bytes(raw[128..136].try_into().unwrap()) as usize;
@@ -229,6 +294,71 @@ mod tests {
             raw[at..at + 8].copy_from_slice(&(offset + delta as u64).to_le_bytes());
         }
         raw
+    }
+    #[test]
+    fn ordered_draft_focus_pages_history_and_publication_stay_source_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = fixture_count(130);
+        std::fs::write(&path, &raw).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&raw));
+        let metadata = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let selected = metadata.metadata["tasks"][129]["guid"].as_str().unwrap().to_owned();
+        let original_first = metadata.metadata["tasks"][0]["guid"].clone();
+        let engine = Engine::new(crate::testing::session());
+        engine.call("formats_project_tasks_list", json!({"path":path}), CallOptions::new(Caller::Cli)).unwrap();
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let id = opened["draft_id"].as_u64().unwrap();
+        assert_eq!(opened["order_supported"], true);
+        let request = |action, revision| json!({"action":action,"draft_id":id,"expected_source_sha256":hash,"revision":revision});
+        let refreshed = call(json!({"action":"refresh","draft_id":id,"expected_source_sha256":hash,"offset":100})).unwrap();
+        assert_eq!(refreshed["tasks"][29]["sibling_index"], 129);
+        assert_eq!(refreshed["tasks"][29]["sibling_total"], 130);
+        let mut apply = request("apply", 0);
+        apply["edits"] = json!([]);
+        apply["text_edits"] = json!([{"field":"task_name","task_guid":selected,"expected":"A","value":"Moved_\u{6881}_\u{1f600}"}]);
+        apply["order_edits"] = json!([{"task_guid":selected,"expected_parent_guid":null,"expected_sibling_index":129,"sibling_index":0}]);
+        apply["focus_task_guid"] = json!(selected);
+        let changed = call(apply).unwrap();
+        assert_eq!(changed["offset"], 0);
+        assert_eq!(changed["tasks"][0]["guid"], selected);
+        assert_eq!(changed["order_edit_count"], 1);
+        let mut invalid = request("apply", 1);
+        invalid["edits"] = json!([{"field":"task_duration","task_guid":original_first,"expected_storage":0,"value_storage":42}]);
+        invalid["focus_task_guid"] = json!("00000000-0000-0000-0000-000000000000");
+        assert!(call(invalid).is_err());
+        assert_eq!(call(request("inspect", 1)).unwrap()["draft_sha256"], changed["draft_sha256"]);
+        let mut undo = request("undo", 1);
+        undo["focus_task_guid"] = json!(selected);
+        let undone = call(undo).unwrap();
+        assert_eq!(undone["offset"], 100);
+        assert_eq!(undone["tasks"][29]["guid"], selected);
+        assert_eq!(undone["dirty"], false);
+        let mut redo = request("redo", 2);
+        redo["focus_task_guid"] = json!(selected);
+        let redone = call(redo).unwrap();
+        assert_eq!(redone["offset"], 0);
+        assert_eq!(redone["tasks"][0]["guid"], selected);
+        let output = dir.path().join("ordered.sp");
+        let mut export = request("write_candidate", 3);
+        export["output_path"] = json!(output);
+        export["acknowledge_storage_only"] = json!(true);
+        call(export.clone()).unwrap();
+        assert!(call(export).is_err());
+        let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt["version"], 3);
+        assert_eq!(receipt["mixed_stage"]["output_sha256"], receipt["order_stages"][0]["source_sha256"]);
+        assert_eq!(receipt["source_sha256"], hash);
+        let original = engine.call("formats_project_tasks_list", json!({"path":path}), CallOptions::new(Caller::Cli)).unwrap().to_json();
+        assert_eq!(original["result"]["page"]["items"][0]["guid"], original_first);
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+        std::fs::write(&path, b"stale source").unwrap();
+        let mut export = request("write_candidate", 3);
+        export["output_path"] = json!(dir.path().join("stale.sp"));
+        export["acknowledge_storage_only"] = json!(true);
+        assert!(call(export).is_err());
+        assert!(!dir.path().join("stale.sp").exists());
     }
     #[test]
     fn mixed_draft_exports_version_two_and_keeps_original_source_guards() {

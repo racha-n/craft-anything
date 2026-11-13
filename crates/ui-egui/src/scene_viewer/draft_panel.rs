@@ -2,7 +2,7 @@
 use super::{SceneApp, project_panel};
 use crate::jobs::Jobs;
 use craft_anything_engine::{CallOptions, Caller, Engine, tools::scene_project_tools::TaskView};
-use craft_anything_formats::sp_project::{task_strings::TextEdit, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{ordered::ORDER_LIMIT, relocation::Move as OrderMove, task_strings::TextEdit, writer::ScalarEdit};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -27,6 +27,12 @@ struct Task {
     name: String,
     #[serde(default)]
     display_id: String,
+    #[serde(default)]
+    parent_guid: Option<String>,
+    #[serde(default)]
+    sibling_index: usize,
+    #[serde(default)]
+    sibling_total: usize,
     planned_start_wallclock_scalar: u64,
     duration_storage_scalar: u64,
     assignments: Vec<Assignment>,
@@ -57,10 +63,21 @@ struct Snapshot {
     can_undo: bool,
     can_redo: bool,
     edit_count: usize,
+    #[serde(default)]
+    order_edit_count: usize,
+    #[serde(default = "order_limit")]
+    order_edit_limit: usize,
+    #[serde(default)]
+    order_supported: bool,
+    #[serde(default)]
+    order_reason: String,
     task_total: usize,
     offset: usize,
     tasks: Vec<Task>,
     derived_tasks: DerivedPage,
+}
+fn order_limit() -> usize {
+    ORDER_LIMIT
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Field {
@@ -186,6 +203,8 @@ struct State {
     fields: Vec<Field>,
     #[serde(default)]
     labels: TaskLabels,
+    #[serde(default)]
+    order_position: usize,
     output: String,
     acknowledge: bool,
     discard: bool,
@@ -199,13 +218,24 @@ impl State {
         if value.tasks.len() > 100 || value.derived_tasks.items.len() > 100 {
             return Err("Draft response exceeded its page size.".into());
         }
+        if value.order_edit_limit > ORDER_LIMIT
+            || value.order_edit_count > value.order_edit_limit
+            || value.order_supported
+                && value.tasks.iter().any(|t| t.sibling_total == 0 || t.sibling_total > value.task_total || t.sibling_index >= t.sibling_total)
+        {
+            return Err("Draft order response exceeded its supported limits.".into());
+        }
         if self.snapshot.as_ref().is_some_and(|old| old.draft_id == value.draft_id && old.revision > value.revision) {
             return Err("An older draft response was not applied.".into());
         }
-        self.selected = self.selected.min(value.tasks.len().saturating_sub(1));
+        let selected_guid = self.snapshot.as_ref().and_then(|s| s.tasks.get(self.selected)).map(|t| &t.guid);
+        self.selected = selected_guid
+            .and_then(|id| value.tasks.iter().position(|t| &t.guid == id))
+            .unwrap_or_else(|| self.selected.min(value.tasks.len().saturating_sub(1)));
         self.field_offset = 0;
         self.fields = value.tasks.get(self.selected).map(|t| fields(t, 0)).unwrap_or_default();
         self.labels = value.tasks.get(self.selected).map(TaskLabels::from_task).unwrap_or_default();
+        self.order_position = value.tasks.get(self.selected).map_or(1, |t| t.sibling_index.saturating_add(1));
         self.snapshot = Some(value);
         self.discard = false;
         self.acknowledge = false;
@@ -254,6 +284,11 @@ impl DraftPanel {
             params["draft_id"] = json!(s.draft_id);
             if action != "refresh" {
                 params["revision"] = json!(s.revision);
+            }
+            if matches!(action, "apply" | "undo" | "redo")
+                && let Some(task) = s.tasks.get(self.state.selected)
+            {
+                params["focus_task_guid"] = json!(task.guid);
             }
         } else {
             return;
@@ -334,7 +369,7 @@ impl DraftPanel {
                     return;
                 };
                 ui.horizontal(|ui| {
-                    ui.label(format!("Revision {} · {} edited fields", snapshot.revision, snapshot.edit_count));
+                    ui.label(format!("Revision {} · {} changes", snapshot.revision, snapshot.edit_count));
                     if ui.add_enabled(snapshot.can_undo, egui::Button::new("Undo")).clicked() { action = Some(("undo", json!({}))); }
                     if ui.add_enabled(snapshot.can_redo, egui::Button::new("Redo")).clicked() { action = Some(("redo", json!({}))); }
                     if ui.button("Refresh").clicked() { action = Some(("refresh", json!({"offset":snapshot.offset}))); }
@@ -353,7 +388,7 @@ impl DraftPanel {
                     for (index, task) in snapshot.tasks.iter().enumerate() { ui.selectable_value(&mut self.state.selected, index, task.label()).on_hover_text(&task.guid); }
                 });
                 if let Some(task) = snapshot.tasks.get(self.state.selected) {
-                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); self.state.labels = TaskLabels::from_task(task); }
+                    if old != self.state.selected { self.state.field_offset = 0; self.state.fields = fields(task, 0); self.state.labels = TaskLabels::from_task(task); self.state.order_position=task.sibling_index.saturating_add(1); }
                     if let Some(derived) = snapshot.derived_tasks.items.iter().find(|t| t.guid == task.guid) {
                         ui.label(derived.planned_start.zip(derived.planned_finish).map(|(a,b)| format!("Preview dates: {} → {}", project_panel::wallclock(a), project_panel::wallclock(b))).unwrap_or_else(|| "Preview dates unresolved".into()));
                         for reason in derived.unresolved_reasons.iter().take(4) { ui.small(reason); }
@@ -366,6 +401,22 @@ impl DraftPanel {
                                 ui.add(egui::TextEdit::singleline(text).char_limit(16384).desired_width(ui.available_width().clamp(180.,600.))).labelled_by(label.id);
                             });
                         }
+                    });
+                    ui.collapsing("Task order", |ui| {
+                        if !snapshot.order_supported {
+                            ui.small(if snapshot.order_reason.is_empty() { "Refresh this draft to inspect task ordering." } else { &snapshot.order_reason });
+                            return;
+                        }
+                        ui.small("Change position within the same parent. Apply with the field changes below.");
+                        ui.add_enabled_ui(snapshot.order_edit_count<snapshot.order_edit_limit, |ui| { ui.horizontal(|ui| {
+                            let label=ui.label("Position among siblings");
+                            ui.add(egui::DragValue::new(&mut self.state.order_position).range(1..=task.sibling_total.max(1))).labelled_by(label.id);
+                            ui.label(format!("of {}",task.sibling_total));
+                            if ui.add_enabled(self.state.order_position>1,egui::Button::new("Earlier")).clicked() { self.state.order_position=self.state.order_position.saturating_sub(1); }
+                            if ui.add_enabled(self.state.order_position<task.sibling_total,egui::Button::new("Later")).clicked() { self.state.order_position=self.state.order_position.saturating_add(1); }
+                        }); });
+                        ui.small(format!("{} of {} order operations in this draft.",snapshot.order_edit_count,snapshot.order_edit_limit));
+                        if snapshot.order_edit_count>=snapshot.order_edit_limit { ui.small("Export this candidate before starting another draft for more ordering changes."); }
                     });
                     ui.collapsing("Advanced scalar fields", |ui| {
                         ui.small("Values use source storage units. Quantity and utilization are separate fields; changed fields on this page are applied together.");
@@ -381,9 +432,14 @@ impl DraftPanel {
                     match (proposals,self.state.labels.proposals(task)) {
                         (Ok(values),Ok(text_edits)) => {
                             let edits=values.into_iter().flatten().collect::<Vec<_>>();
-                            ui.small("Apply changed labels and the current scalar page together.");
-                            if ui.add_enabled(!edits.is_empty() || !text_edits.is_empty(),egui::Button::new("Apply to draft")).clicked() {
-                                action=Some(("apply",json!({"edits":edits,"text_edits":text_edits})));
+                            let index=self.state.order_position.saturating_sub(1);
+                            let order_edits=if snapshot.order_supported && index!=task.sibling_index {
+                                vec![OrderMove{task_guid:task.guid.clone(),expected_parent_guid:task.parent_guid.clone(),expected_sibling_index:task.sibling_index,sibling_index:index}]
+                            } else {Vec::new()};
+                            let within_limit=snapshot.order_edit_count.saturating_add(order_edits.len())<=snapshot.order_edit_limit;
+                            ui.small("Apply changed labels, task order and the current scalar page together.");
+                            if ui.add_enabled(within_limit && (!edits.is_empty() || !text_edits.is_empty() || !order_edits.is_empty()),egui::Button::new("Apply to draft")).clicked() {
+                                action=Some(("apply",json!({"edits":edits,"text_edits":text_edits,"order_edits":order_edits})));
                             }
                         }
                         (Err(error),_) | (_,Err(error)) => {ui.label(error);}

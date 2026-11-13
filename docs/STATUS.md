@@ -96,6 +96,35 @@ builds, 2,485 formats/engine target tests (19 ignored), all-target clippy, layer
 locks, secrets, tools, wasm, doctests and formatting. See
 [the bounded contract](4d5d-completion.md#existing-task-sibling-order-candidates).
 
+### Shared field and task-order drafts (R3.14)
+
+The draft interface combines numeric/text fields and up to eight same-parent order
+operations in shared bounded history. Apply/undo/redo preserves selected-task GUID
+identity across 100-task pages; source-keyed caches and the original viewport remain
+isolated. Ordering availability comes from the same typed admission as the writer.
+Unsupported sources retain their field forms. Positions in the form are one-based;
+Earlier/Later adjusts a pending position before Apply. Ordered exports use a separate
+version-3 receipt with the original mixed and per-move stage receipts; scalar/text
+exports without order changes keep their previous versions.
+
+Targeted checks passed 42 formats regressions, three engine draft tests including
+130-task paging/cache isolation, and seven form/widget tests. Actual widget actions
+covered selection, combined edits, undo/redo and version-3 publication; both layouts'
+offscreen images were inspected with the pinned fonts. All 11 frozen checks passed,
+including main/CLI builds, 2,731 formats/engine/UI target tests (25 ignored), clippy,
+layers, locks, secrets, tools, wasm, doctests and formatting. Version-2/version-3
+widget receipts passed their schemas and the ordered hash chain was verified.
+
+The latest CLI duration/name/ID plus sibling-order candidate matched independent
+native Tasks and typed task pages while preserving all 47 other sections. Native
+Save/unload/reopen preserved its Tasks; the modified task's General values matched
+the independent control before/after, and the unchanged task matched its baseline.
+Candidate/receipt bytes and all 57 protected sources remained unchanged. General
+hierarchy editing and native Save remain unadmitted. See
+[the contract](4d5d-completion.md#shared-field-and-task-order-drafts).
+The main application's metadata-only schedule/cost workflow still needs its own
+source-bound draft entry point; the existing application entry requires a loaded SP scene.
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,
