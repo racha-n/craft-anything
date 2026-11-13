@@ -110,6 +110,7 @@ fn missing_original_rows_unknown_references_and_forged_pairs_are_refused() {
     let materialized = draft.bytes(|_| true).unwrap();
     let hints = draft.deletion_availability(&materialized, &inspect(&materialized).source_sha256, |_| true).unwrap();
     assert!(hints.anchors.is_empty());
+    assert!(draft.editable_authored_candidate(|_| true).is_err());
     let req = deletion(&materialized, &r.task_guid);
     assert!(draft.delete_leaf(1, &req, |_| true).is_err());
     assert_eq!(draft.revision, 1);
@@ -241,4 +242,77 @@ fn completion_deletion_cancellation_is_atomic_and_the_structural_budget_stays_sh
     assert!(d.delete_leaf(8, &deletion(&current, &guid), |_| true).is_err());
     assert_eq!(d.structural_edit_count(), 8);
     assert_eq!(d.bytes(|_| true).unwrap(), current);
+}
+
+#[test]
+fn explicit_editable_export_reopens_without_provenance_and_keeps_legacy_history_exact() {
+    for n in [2, 4, 110] {
+        let raw = source(n);
+        let r = insertion(&raw, 1);
+        let mut draft = Draft::open(raw.clone(), &inspect(&raw).source_sha256, |_| true).unwrap();
+        draft.insert_above(0, &r, |_| true).unwrap();
+        let legacy = draft.authored_candidate(|_| true).unwrap();
+        let legacy_receipt = serde_json::to_value(&legacy.receipt).unwrap();
+        let out = draft.editable_authored_candidate(|_| true).unwrap();
+        let receipt = serde_json::to_value(&out.receipt).unwrap();
+        assert_eq!(receipt["version"], 8);
+        assert_eq!(receipt["stages"][0], legacy_receipt["stages"][0]);
+        assert_eq!(receipt["stages"][1]["receipt"]["source_sha256"], legacy.receipt.output_sha256);
+        assert_chain(&receipt);
+        assert_eq!(container(&out.bytes, &mut |_| true).unwrap().decoded["Tasks"], container(&legacy.bytes, &mut |_| true).unwrap().decoded["Tasks"]);
+        let mut reopened = Draft::open(out.bytes.clone(), &out.receipt.output_sha256, |_| true).unwrap();
+        assert!(!reopened.creates_task(&r.task_guid));
+        assert_eq!(reopened.creation_count(), 0);
+        assert_eq!(reopened.deletion_availability(&out.bytes, &out.receipt.output_sha256, |_| true).unwrap().anchors.len(), n + 1);
+        reopened.delete_leaf(0, &deletion(&out.bytes, &r.task_guid), |_| true).unwrap();
+        assert_eq!(reopened.authored_receipt_version(), 6);
+        assert_eq!(
+            container(&reopened.bytes(|_| true).unwrap(), &mut |_| true).unwrap().decoded["Tasks"],
+            container(&raw, &mut |_| true).unwrap().decoded["Tasks"]
+        );
+        assert_eq!(draft.revision, 1);
+        assert_eq!(draft.bytes(|_| true).unwrap(), legacy.bytes);
+        assert_eq!(serde_json::to_value(draft.authored_candidate(|_| true).unwrap().receipt).unwrap(), legacy_receipt);
+        draft.undo(1).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), raw);
+        draft.redo(2).unwrap();
+        assert_eq!(draft.bytes(|_| true).unwrap(), legacy.bytes);
+    }
+}
+
+#[test]
+fn editable_export_handles_completed_v7_and_cancel_without_publishing_draft_changes() {
+    let raw = source(4);
+    let r = insertion(&raw, 1);
+    let mut draft = Draft::open(raw.clone(), &inspect(&raw).source_sha256, |_| true).unwrap();
+    draft.insert_above(0, &r, |_| true).unwrap();
+    let current = draft.bytes(|_| true).unwrap();
+    let mut total = 0;
+    draft
+        .editable_authored_candidate(|_| {
+            total += 1;
+            true
+        })
+        .unwrap();
+    for stop in [1, total / 2, total] {
+        let mut calls = 0;
+        assert!(
+            draft
+                .editable_authored_candidate(|_| {
+                    calls += 1;
+                    calls < stop
+                })
+                .is_err()
+        );
+        assert_eq!(draft.bytes(|_| true).unwrap(), current);
+        assert_eq!(draft.revision, 1);
+    }
+    let existing = inspect(&raw).tasks[0].guid.clone();
+    draft.delete_leaf(1, &deletion(&current, &existing), |_| true).unwrap();
+    let legacy = draft.authored_candidate(|_| true).unwrap();
+    let out = draft.editable_authored_candidate(|_| true).unwrap();
+    assert_eq!(out.bytes, legacy.bytes);
+    assert_eq!(out.receipt.stages.len(), legacy.receipt.stages.len());
+    assert_eq!(out.receipt.version, 8);
+    assert_chain(&serde_json::to_value(out.receipt).unwrap());
 }

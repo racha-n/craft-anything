@@ -23,6 +23,13 @@ struct EditSession {
 }
 #[derive(Default)]
 struct DraftSequence(u64);
+#[derive(Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ExportMode {
+    #[default]
+    Legacy,
+    Editable,
+}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
@@ -106,13 +113,15 @@ enum Request {
         revision: u64,
         output_path: String,
         acknowledge_storage_only: bool,
+        #[serde(default)]
+        export_mode: ExportMode,
     },
 }
 pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound draft, inspect creation/deletion layout hints and apply guarded fields/order/hierarchy, default Work insertion or unassigned root-leaf deletion. Retain bounded atomic history and GUID-focused undo/redo. Post-creation deletion completes only provenance-bound presentation rows and uses version 7; prior deletion/creation exports retain versions 6/5 and legacy drafts keep their versions. At most eight insertions/deletions/relocations; target-reference validation, native saving and general rescheduling remain independent gates.",
+        "Open a source-bound draft, inspect creation/deletion layout hints and apply guarded fields/order/hierarchy, default Work insertion or unassigned root-leaf deletion. Retain bounded atomic history and GUID-focused undo/redo. Explicit editable export completes admitted unassigned task rows with version 8; default legacy export retains versions 1 through 7. At most eight insertions/deletions/relocations; per-target reference validation, native saving and general rescheduling remain independent gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -228,9 +237,12 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             focus = if deleted_focus_index.is_some() { None } else { focus_task_guid };
         }
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
-        Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
+        Request::WriteCandidate { output_path, acknowledge_storage_only, export_mode, .. } => {
             if session.draft.has_authored_edits() {
-                return write_authored(ctx, &session, &output_path, acknowledge_storage_only);
+                return write_authored(ctx, &session, &output_path, acknowledge_storage_only, export_mode);
+            }
+            if export_mode == ExportMode::Editable {
+                return Err(ToolError::invalid("Editable export requires an authored task draft with an admitted unassigned root-task layout."));
             }
             if session.draft.has_hierarchy_edits() {
                 return project_candidate_tools::run_structured(
@@ -354,6 +366,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "redo_creation_task_guid":session.draft.redo_creation_task_guid(),
         "undo_deletion_task_guid":session.draft.undo_deletion_task_guid(),
         "deletion_source_sha256":deletion.source_sha256,"deletion_layout_supported":!deletion.anchors.is_empty(),
+        "editable_export_supported":session.draft.has_authored_edits() && !deletion.anchors.is_empty(),
         "deletion_reason":deletion.reason.as_deref().unwrap_or_default(),"deletion_reference_scan_required":deletion.reference_scan_required,
         "creation_reason":creation.reason.as_deref().unwrap_or_default(),"creation_suggested_display_id":creation.suggested_display_id,
         "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
@@ -388,7 +401,7 @@ fn fresh_task_identity() -> Result<String, ToolError> {
         .map(|parts| parts.join("-"))
 }
 
-fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, acknowledged: bool) -> Result<ToolOutput, ToolError> {
+fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, acknowledged: bool, mode: ExportMode) -> Result<ToolOutput, ToolError> {
     use craft_anything_evidence::{Confidence, Limitation};
     use sha2::{Digest, Sha256};
     if !acknowledged {
@@ -399,17 +412,21 @@ fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, a
     if !format!("{:x}", Sha256::digest(&input.bytes)).eq_ignore_ascii_case(&session.draft.source_sha256) {
         return Err(ToolError::invalid("Source changed; reload before exporting the draft."));
     }
-    let candidate = session.draft.authored_candidate(|progress| {
+    let progress = |progress| {
         ctx.report(Some(progress), "Replaying guarded authored task edits");
         !ctx.cancel.is_cancelled()
-    });
+    };
+    let candidate = match mode {
+        ExportMode::Legacy => session.draft.authored_candidate(progress),
+        ExportMode::Editable => session.draft.editable_authored_candidate(progress),
+    };
     if ctx.cancel.is_cancelled() {
         return Err(ToolError::cancelled());
     }
     let candidate = candidate.map_err(ToolError::invalid)?;
     let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
     let evidence = super::static_input::builder(ctx, "formats_project_edit", input.subject,
-        json!({"action":"write_candidate","draft_id":session.id,"revision":session.draft.revision,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,"acknowledge_storage_only":acknowledged}))
+        json!({"action":"write_candidate","draft_id":session.id,"revision":session.draft.revision,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,"acknowledge_storage_only":acknowledged,"export_mode":if mode == ExportMode::Editable {"editable"} else {"legacy"}}))
         .summary("Prepared a chronological task draft candidate")
         .confidence(Confidence::Derived)
         .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
@@ -431,6 +448,84 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn editable_export_keeps_legacy_bytes_and_reopens_in_an_independent_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(4, Some(0));
+        std::fs::write(&path, &raw).unwrap();
+        let parsed = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let hash = parsed.source_sha256;
+        let engine = Engine::new(crate::testing::session());
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let req = |action, revision| json!({"action":action,"draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":revision});
+        let mut export = req("write_candidate", 0);
+        export["output_path"] = json!(dir.path().join("refused.sp"));
+        export["acknowledge_storage_only"] = json!(true);
+        export["export_mode"] = json!("editable");
+        assert!(call(export.clone()).is_err());
+        assert!(!dir.path().join("refused.sp").exists());
+        let mut create = req("create_default_work", 0);
+        create["anchor_task_guid"] = parsed.metadata["tasks"][0]["guid"].clone();
+        create["expected_parent_guid"] = Value::Null;
+        create["expected_sibling_index"] = json!(0);
+        create["name"] = json!("Created_\u{0e07}\u{0e32}\u{0e19}_\u{6881}");
+        create["display_id"] = json!("NEW-1");
+        let changed = call(create).unwrap();
+        assert_eq!(changed["editable_export_supported"], true);
+        let created_guid = changed["focused_task_guid"].clone();
+        export["revision"] = json!(1);
+        export["output_path"] = json!(dir.path().join("editable.sp"));
+        export["export_mode"] = json!("unknown");
+        assert!(call(export.clone()).is_err());
+        export["export_mode"] = json!("editable");
+        export["acknowledge_storage_only"] = json!(false);
+        assert!(call(export.clone()).is_err());
+        export["acknowledge_storage_only"] = json!(true);
+        let cancel = crate::CancelToken::default();
+        cancel.cancel();
+        assert!(engine.call("formats_project_edit", export.clone(), CallOptions::new(Caller::Cli).with_cancel(cancel)).is_err());
+        assert!(!dir.path().join("editable.sp").exists());
+        let published = call(export.clone()).unwrap();
+        assert_eq!(published["receipt"]["version"], 8);
+        assert!(call(export.clone()).is_err());
+        let editable = dir.path().join("editable.sp");
+        let fresh = Engine::new(crate::testing::session());
+        let reopened = fresh
+            .call(
+                "formats_project_edit",
+                json!({"action":"open","path":editable,"expected_source_sha256":published["receipt"]["output_sha256"]}),
+                CallOptions::new(Caller::Cli),
+            )
+            .unwrap()
+            .to_json()["result"]
+            .clone();
+        assert_eq!(reopened["creation_count"], 0);
+        assert_eq!(reopened["editable_export_supported"], false);
+        let row = reopened["tasks"].as_array().unwrap().iter().find(|t| t["guid"] == created_guid).unwrap();
+        let removed = fresh.call("formats_project_edit", json!({"action":"delete_leaf","draft_id":reopened["draft_id"],"expected_source_sha256":reopened["source_sha256"],"revision":0,"deletion":row["deletion"]}), CallOptions::new(Caller::Cli)).unwrap().to_json()["result"].clone();
+        assert_eq!(removed["task_total"], 4);
+        assert_eq!(removed["candidate_receipt_version"], 6);
+        assert_eq!(call(req("inspect", 1)).unwrap()["draft_sha256"], changed["draft_sha256"]);
+        for (name, mode) in [("legacy-default.sp", None), ("legacy-explicit.sp", Some("legacy"))] {
+            export["output_path"] = json!(dir.path().join(name));
+            export.as_object_mut().unwrap().remove("export_mode");
+            if let Some(mode) = mode {
+                export["export_mode"] = json!(mode);
+            }
+            let legacy = call(export.clone()).unwrap();
+            assert_eq!(legacy["receipt"]["version"], 5);
+            assert_eq!(legacy["receipt"]["output_sha256"], changed["draft_sha256"]);
+        }
+        assert_eq!(std::fs::read(dir.path().join("legacy-default.sp")).unwrap(), std::fs::read(dir.path().join("legacy-explicit.sp")).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+        std::fs::write(&path, b"changed").unwrap();
+        export["export_mode"] = json!("editable");
+        export["output_path"] = json!(dir.path().join("stale.sp"));
+        assert!(call(export).is_err());
+        assert!(!dir.path().join("stale.sp").exists());
     }
     #[test]
     fn created_task_deletion_uses_provenance_bound_hints_v7_and_paged_history() {

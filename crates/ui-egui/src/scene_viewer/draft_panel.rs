@@ -101,6 +101,8 @@ struct Snapshot {
     #[serde(default)]
     deletion_layout_supported: bool,
     #[serde(default)]
+    editable_export_supported: bool,
+    #[serde(default)]
     deletion_reference_scan_required: bool,
     #[serde(default)]
     deletion_reason: String,
@@ -271,6 +273,8 @@ struct State {
     parent_change: Option<Reparent>,
     output: String,
     acknowledge: bool,
+    #[serde(default)]
+    editable_export: bool,
     discard: bool,
     status: String,
 }
@@ -285,12 +289,13 @@ impl State {
         if value.task_collection_lookup.as_ref().is_some_and(|r| !r.shape_valid() || r.entries_checked != value.task_total) {
             return Err("Draft lookup coverage is inconsistent.".into());
         }
-        if value.deletion_layout_supported
-            && (value.task_total < 2
-                || value.task_total >= 512
-                || value.deletion_source_sha256.len() != 64
-                || value.deletion_source_sha256 != value.draft_sha256
-                || !value.deletion_reference_scan_required)
+        if value.editable_export_supported && (!value.dirty || !value.deletion_layout_supported)
+            || value.deletion_layout_supported
+                && (value.task_total < 2
+                    || value.task_total >= 512
+                    || value.deletion_source_sha256.len() != 64
+                    || value.deletion_source_sha256 != value.draft_sha256
+                    || !value.deletion_reference_scan_required)
             || !value.deletion_source_sha256.is_empty() && value.deletion_source_sha256 != value.draft_sha256
             || value.undo_deletion_task_guid.as_ref().is_some_and(|id| id.len() != 36 || !value.can_undo)
             || value.tasks.iter().any(|t| {
@@ -615,7 +620,14 @@ impl DraftPanel {
                 ui.separator();
                 ui.horizontal(|ui| { ui.add(egui::TextEdit::singleline(&mut self.state.output).char_limit(2048).hint_text("New absolute .sp output path")); if ui.button("Choose output").clicked() { choose = true; } });
                 ui.checkbox(&mut self.state.acknowledge, "I will validate this experimental candidate in the native application.");
-                if ui.add_enabled(self.state.acknowledge && !self.state.output.is_empty(), egui::Button::new("Export candidate")).clicked() { action = Some(("write_candidate", json!({"output_path":self.state.output,"acknowledge_storage_only":true}))); }
+                ui.add_enabled_ui(snapshot.editable_export_supported, |ui| {
+                    ui.checkbox(&mut self.state.editable_export, "Complete saved task rows for a fresh editing draft");
+                });
+                if self.state.editable_export && !snapshot.editable_export_supported {
+                    ui.small("This draft does not support completed-row export. Clear the option to use the legacy export.");
+                }
+                let export_allowed = !self.state.editable_export || snapshot.editable_export_supported;
+                if ui.add_enabled(export_allowed && self.state.acknowledge && !self.state.output.is_empty(), egui::Button::new("Export candidate")).clicked() { action = Some(("write_candidate", json!({"output_path":self.state.output,"acknowledge_storage_only":true,"export_mode":if self.state.editable_export {"editable"} else {"legacy"}}))); }
             });
         });
         self.state.show = show;

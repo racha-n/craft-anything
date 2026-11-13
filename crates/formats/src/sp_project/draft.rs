@@ -183,6 +183,30 @@ impl Draft {
     pub fn authored_candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<replay::Candidate, String> {
         replay::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.structural_edits(), self.operations(), keep).map_err(error)
     }
+    /// Explicit export with a complete saved task map for the admitted deletion layout.
+    /// This does not change the draft, its undo history or legacy export bytes.
+    pub fn editable_authored_candidate(&self, mut keep: impl FnMut(f32) -> bool) -> Result<replay::Candidate, String> {
+        let mut candidate = self.authored_candidate(&mut keep)?;
+        if let Some(completed) = replay::completion(&candidate.bytes, &candidate.receipt.output_sha256, self.operations(), &mut keep).map_err(error)? {
+            candidate.bytes = completed.bytes;
+            candidate.receipt.output_sha256 = completed.receipt.output_sha256.clone();
+            candidate.receipt.stages.push(replay::Stage::PresentationRows(completed.receipt));
+        }
+        let layout = super::deletion::layout_availability(&candidate.bytes, &candidate.receipt.output_sha256, &mut keep).map_err(error)?;
+        if layout.anchors.is_empty() {
+            return Err(layout.reason.unwrap_or_else(|| "Editable export requires a complete admitted unassigned root-task layout".into()));
+        }
+        if !keep(1.0) {
+            return Err("Editable export cancelled".into());
+        }
+        candidate.receipt.version = 8;
+        candidate.receipt.limitations = vec![
+            "Explicit editable export completes the saved task map for admitted unassigned Planned root leaves using only active creation provenance.",
+            "A fresh draft validates this file independently; deletion still requires its authoritative per-target reference scan.",
+            "The draft and legacy export remain unchanged. Assigned-task deletion, native history, generic saving and full scheduling remain unadmitted.",
+        ];
+        Ok(candidate)
+    }
     pub fn bytes(&self, keep: impl FnMut(f32) -> bool) -> Result<Vec<u8>, String> {
         if self.has_authored_edits() {
             return self.authored_candidate(keep).map(|c| c.bytes);

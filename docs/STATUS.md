@@ -6,6 +6,21 @@ workspace clippy, layers, fmt and the secret scan of all history were clean. Chi
 
 ## What works, and how it was checked
 
+### Explicit completed-row export (R3.14)
+
+An optional version-8 export completes admitted unassigned task presentation rows
+while preserving the current draft and legacy export defaults. Four independent
+CLI processes reopen the exported files with no creation ledger and delete
+through the existing guards. Their resulting files match the four previously
+native-verified candidates exactly. Six v5, four v6 and four v7 complete SP/receipt
+pairs remain identical. All fifteen frozen checks pass with 2,820 all-target
+tests (25 ignored). Two new native Save As/unload/reopen cases pass 738
+General comparisons and exact Tasks; nineteen widget, two fresh viewer and two
+native images were inspected. Eight geometry frames and all 57 protected sources
+remain unchanged. The independent assigned-geometry no-visit row control passed,
+but assigned completion/deletion and generic native Save remain unadmitted. See
+[the export contract](4d5d-completion.md#explicit-completed-row-export-r314).
+
 ### Native authoring acceptance remains open (R3.14)
 
 The expanded 4D/5D goal includes schedule/cost editing and native SP persistence. Existing

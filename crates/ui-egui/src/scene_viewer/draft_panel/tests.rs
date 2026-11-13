@@ -606,6 +606,9 @@ fn creation_widget_focus_history_cancel_and_export_follow_the_engine() {
 fn creation_snapshot_rejects_stale_hints_and_unresolved_focus() {
     let mut state = State::default();
     let source = "a".repeat(64);
+    let mut invalid = snapshot(1, 1);
+    invalid.editable_export_supported = true;
+    assert!(state.accept(invalid, &source, None).is_err());
     let mut value = snapshot(1, 0);
     value.creation_supported = true;
     value.creation_source_sha256 = "b".repeat(64);
@@ -618,6 +621,70 @@ fn creation_snapshot_rejects_stale_hints_and_unresolved_focus() {
     value.redo_creation_task_guid = Some("22222222-2222-2222-2222-222222222222".into());
     assert!(state.accept(value, &source, None).is_err());
     assert!(state.snapshot.is_none());
+}
+
+#[test]
+fn editable_export_widget_completes_rows_and_a_new_panel_can_delete_the_created_task() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(4, Some(0));
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let panel = DraftPanel::new(Arc::new(Engine::new(craft_anything_engine::testing::session())), path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    assert!(!h.state().state.snapshot.as_ref().unwrap().editable_export_supported);
+    h.get_by_label("Create task").click();
+    h.run();
+    h.get_by_label("Create one-day task above").scroll_to_me();
+    h.run();
+    h.get_by_label("Create one-day task above").click();
+    settle(&mut h);
+    let created = h.state().state.snapshot.as_ref().unwrap();
+    assert!(created.editable_export_supported);
+    let created_hash = created.draft_sha256.clone();
+    let guid = created.tasks[0].guid.clone();
+    let output = dir.path().join("editable.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    for label in ["I will validate this experimental candidate in the native application.", "Complete saved task rows for a fresh editing draft"] {
+        h.get_by_label(label).scroll_to_me();
+        h.run();
+        h.get_by_label(label).click();
+        h.run();
+    }
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let image = std::path::PathBuf::from(folder).join("editable-export-widget.png");
+        assert!(!image.exists());
+        h.render().unwrap().save(image).unwrap();
+    }
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 8);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().draft_sha256, created_hash);
+    let panel = DraftPanel::new(
+        Arc::new(Engine::new(craft_anything_engine::testing::session())),
+        output.to_string_lossy().into_owned(),
+        receipt["output_sha256"].as_str().unwrap().into(),
+    );
+    let mut fresh =
+        egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&fresh.ctx);
+    settle(&mut fresh);
+    assert_eq!(fresh.state().state.snapshot.as_ref().unwrap().tasks[0].guid, guid);
+    fresh.get_by_label("Delete task").click();
+    fresh.run();
+    fresh.get_by_label("Delete from draft").scroll_to_me();
+    fresh.run();
+    fresh.get_by_label("Delete from draft").click();
+    settle(&mut fresh);
+    assert_eq!(fresh.state().state.snapshot.as_ref().unwrap().task_total, 4);
+    assert!(fresh.state().state.snapshot.as_ref().unwrap().tasks.iter().all(|t| t.guid != guid));
+    assert_eq!(std::fs::read(path).unwrap(), raw);
 }
 #[test]
 fn widget_actions_refresh_shared_revision_and_export_mixed_without_changing_source() {
@@ -726,6 +793,7 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         undo_deletion_task_guid: None,
         deletion_source_sha256: String::new(),
         deletion_layout_supported: false,
+        editable_export_supported: false,
         deletion_reference_scan_required: false,
         deletion_reason: String::new(),
         creation_source_sha256: String::new(),

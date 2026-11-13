@@ -973,3 +973,41 @@ by creation and either target. Every file passes native Save As, unload and reop
 the round trip. Four native images were inspected; all 57 protected source hashes
 remain unchanged. These are case-specific results for the admitted native build,
 not all-project or general native-transaction certification.
+
+## Explicit completed-row export (R3.14)
+
+`formats_project_edit` accepts `export_mode: "editable"` on `write_candidate` for
+an authored draft in the admitted unassigned Planned root-leaf layout. It replays
+the existing chronological stages, completes any remaining rows from active
+creation identities, then independently validates the complete saved task map.
+The [version-8 receipt](schemas/sp-authored-candidate-receipt-v8.schema.json)
+records the final hash chain. Missing original rows, unknown references and
+unsupported layouts still refuse export. A fresh draft receives no creation
+ledger and must validate the resulting file through the ordinary deletion gates.
+The per-target reference scan remains mandatory.
+
+Omitting `export_mode`, or choosing `legacy`, retains existing export versions and
+bytes. Export does not replace the source, alter the draft or change Undo/Redo.
+The interface offers completed-row export only when the backend reports its
+admitted layout, and preserves an explicit choice if later edits make it
+unsupported. Publication remains two individually atomic no-clobber writes;
+the SP and receipt are not a two-file transaction.
+
+An independent geometry-bearing creation control was saved without selecting the
+new task, unloaded and reopened in native build 6.5.5.28. Tasks remained exact;
+inserting just the observed row reconstructed the complete native presentation
+payload, retaining all existing rows. This validates that specific row control,
+not assigned-task deletion or a broader production completion scope. Editable
+export remains restricted to the unassigned subset. All fifteen frozen checks pass with 2,820 all-target tests
+(25 ignored), including eighteen format/completion, twelve engine and
+eighteen widget cases. Four version-8 cases pass 75 MCP calls and twelve
+refusals; four independent CLI processes reopen without a creation ledger and
+delete through the normal guards. Their resulting SP files match the four
+previously native-verified v7 candidates exactly, reusing 1,148 General
+comparisons. Six v5, four v6 and four v7 complete SP/receipt pairs remain
+identical. Two new completed-row exports pass native Save As/unload/reopen,
+738 full General comparisons and exact Tasks through the round trip. Nineteen
+widget, two rebuilt viewer and two native images were inspected; the independent
+no-visit geometry image was inspected separately. Eight declared geometry frames
+and all 57 protected sources remain unchanged. Native history, assigned deletion
+and general Save/scheduling remain unadmitted.
