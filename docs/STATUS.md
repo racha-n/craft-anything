@@ -365,6 +365,16 @@ images pass. The CLI is rebuilt; desktop/viewer are reused. Generic deletion,
 native Save and draft/UI deletion remain pending.
 See [the receipt and acceptance contract](sp-task-deletion-controls.md#standalone-candidate-acceptance).
 
+### Draft response publication (R3.14)
+
+The existing proposed EditSession clone remains the publication boundary. A final
+cancellation check now precedes insertion, and invalid-focus apply/undo/redo plus
+pre-cancelled-request regressions preserve history/hash. Nine frozen engine checks
+pass with 704 target tests (9 ignored) and nine focused cases. Four
+focus refusals in fourteen MCP calls retain state; two deletion SP/receipt identities
+reuse accepted native492 evidence without a new UI run. Schemas/protected57 hashes
+stay unchanged. Draft deletion replay/forms remain pending.
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

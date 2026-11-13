@@ -328,6 +328,10 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
         "tasks":page,"derived_tasks":model.page_tasks(offset,100),
         "native_reopen_verified":false,"derived_schedule_consistency_verified":false});
+    // The proposed session is still private until response validation completes.
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
     ctx.session.ext.insert(Arc::new(DraftSequence(session.id)));
     ctx.session.ext.insert(Arc::new(session));
     Ok(ToolOutput::Value(result))
@@ -394,6 +398,54 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn failed_response_focus_keeps_apply_undo_redo_history_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(4, Some(0));
+        std::fs::write(&path, &raw).unwrap();
+        let parsed = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let guid = parsed.metadata["tasks"][0]["guid"].clone();
+        let hash = parsed.source_sha256;
+        let engine = Engine::new(crate::testing::session());
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let req = |action, revision| json!({"action":action,"draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":revision});
+        let mut apply = req("apply", 0);
+        apply["edits"] = json!([]);
+        apply["text_edits"] = json!([{"field":"task_name","task_guid":guid,"expected":"Task1","value":"Edited"}]);
+        for bad in ["x", "00000000-0000-0000-0000-000000000000"] {
+            apply["focus_task_guid"] = json!(bad);
+            assert!(call(apply.clone()).is_err());
+            let same = call(req("inspect", 0)).unwrap();
+            assert_eq!(same["draft_sha256"], hash);
+            assert_eq!(same["can_undo"], false);
+            assert_eq!(same["tasks"][0]["name"], "Task1");
+        }
+        apply["focus_task_guid"] = guid.clone();
+        let changed = call(apply).unwrap();
+        let changed_hash = changed["draft_sha256"].clone();
+        let mut undo = req("undo", 1);
+        undo["focus_task_guid"] = json!("00000000-0000-0000-0000-000000000000");
+        assert!(call(undo.clone()).is_err());
+        assert_eq!(call(req("inspect", 1)).unwrap()["draft_sha256"], changed_hash);
+        undo["focus_task_guid"] = guid.clone();
+        let undone = call(undo).unwrap();
+        assert_eq!(undone["draft_sha256"], hash);
+        let mut redo = req("redo", 2);
+        redo["focus_task_guid"] = json!("00000000-0000-0000-0000-000000000000");
+        assert!(call(redo.clone()).is_err());
+        let same = call(req("inspect", 2)).unwrap();
+        assert_eq!(same["draft_sha256"], hash);
+        assert_eq!(same["can_redo"], true);
+        redo["focus_task_guid"] = guid;
+        assert_eq!(call(redo).unwrap()["draft_sha256"], changed_hash);
+        let cancel = crate::CancelToken::default();
+        cancel.cancel();
+        assert!(engine.call("formats_project_edit", req("undo", 3), CallOptions::new(Caller::Cli).with_cancel(cancel)).is_err());
+        assert_eq!(call(req("inspect", 3)).unwrap()["draft_sha256"], changed_hash);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
     }
     #[test]
     fn generated_creation_ids_focus_cross_pages_and_remain_stable_only_on_redo() {

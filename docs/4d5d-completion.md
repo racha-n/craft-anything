@@ -886,3 +886,21 @@ The [candidate contract](sp-task-deletion-controls.md#standalone-candidate-accep
 records twelve frozen checks, five old creation identities, thirteen refusals and
 two actual CLI native cases with 492 General comparisons, including a three-cycle
 lookup vector. Generic deletion, native Save and draft/UI deletion remain pending.
+
+## Draft response publication boundary
+
+The existing draft tool already clones its EditSession and validates the complete
+response before publishing the proposed history. It now also checks cancellation
+immediately before publishing the snapshot. Regression coverage verifies invalid
+focus on apply/undo/redo and a pre-cancelled request preserve revision, byte hash
+and history; valid undo/redo still restores the expected bytes. Precise injection
+of cancellation during the final publication window was not tested.
+
+All nine frozen engine checks pass with 704 target tests
+(9 ignored), including nine focused draft-tool cases, a rebuilt CLI, strict
+clippy, layers, locks, staged secrets, doctests and formatting. Four invalid-focus
+requests in fourteen persistent MCP calls retain history/hash. Two standalone
+deletion SP files and receipt values remain identical to the accepted native
+candidates, reusing their 492 General comparisons by full-file identity; no new
+native UI run occurred for this change. Receipt schemas and all 57 protected
+hashes remain unchanged. Chronological draft deletion and its UI remain pending.

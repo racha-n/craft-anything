@@ -1006,6 +1006,12 @@ identities and retain an explicit unknown-Supply-Chain-reference regression.
 existing directory and a `-g` filename filter, or find the path with `rg --files`;
 an argument such as `area/*.rs` can be treated as a nonexistent literal path.
 
+**Trace publication before diagnosing a mutable session.** The draft tool mutates
+a cloned EditSession and inserts it only after validating its complete response.
+Reading the mutation alone suggested a focus rollback defect that was not present.
+Trace the clone and final insertion, inspect existing regressions, then extend
+coverage for the remaining response/history transitions.
+
 **A process search that found itself.** Looking for a helper by a word in its command line, with
 that word in the search's own command, listed the search: "a helper is left behind" after every
 run, with a new pid each time. The new pid was the clue. Build the pattern from parts
