@@ -193,7 +193,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
     ]
 }
-fn output_paths(output: &str) -> Result<(PathBuf, PathBuf), ToolError> {
+pub(super) fn output_paths(output: &str) -> Result<(PathBuf, PathBuf), ToolError> {
     let path = PathBuf::from(output);
     if !path.is_absolute() || !path.extension().is_some_and(|s| s.eq_ignore_ascii_case("sp")) {
         return Err(ToolError::invalid("Choose a new absolute output path ending in .sp."));
@@ -206,7 +206,7 @@ fn output_paths(output: &str) -> Result<(PathBuf, PathBuf), ToolError> {
     }
     Ok((path, receipt))
 }
-fn publish(parent: &Path, output: &Path, receipt_path: &Path, bytes: &[u8], receipt: &[u8]) -> Result<(), ToolError> {
+pub(super) fn publish(parent: &Path, output: &Path, receipt_path: &Path, bytes: &[u8], receipt: &[u8]) -> Result<(), ToolError> {
     let temporary = tempfile::tempdir_in(parent).map_err(|e| ToolError::io(parent.display(), e))?;
     let staged = temporary.path().join("candidate.sp");
     let staged_receipt = temporary.path().join("receipt.json");

@@ -267,6 +267,228 @@ fn payload(raw: &[u8]) -> Vec<u8> {
 const MON: u64 = 1_794_214_800;
 const WED: u64 = 1_794_387_600;
 
+#[cfg(test)]
+mod draft_replay {
+    use super::*;
+    use crate::sp_project::{draft::Draft, hierarchy, task_strings::TextEdit, writer::ScalarEdit};
+    fn open(raw: &[u8]) -> Draft {
+        Draft::open(raw.to_vec(), &writer::hash(raw, &mut |_| true).unwrap(), |_| true).unwrap()
+    }
+    fn rename(id: u8, expected: &str, value: &str) -> TextEdit {
+        TextEdit::TaskName { task_guid: super::id(id), expected: expected.into(), value: value.into() }
+    }
+    fn movement(from: usize, to: usize) -> hierarchy::Reparent {
+        hierarchy::Reparent { task_guid: id(0x77), expected_parent_guid: None, expected_sibling_index: from, parent_guid: None, sibling_index: to }
+    }
+    fn stage_hash(stage: &serde_json::Value, key: &str) -> String {
+        stage["receipt"][key].as_str().unwrap().to_owned()
+    }
+    #[test]
+    fn chronological_creation_edits_order_and_parent_keep_complete_receipt_chain() {
+        let raw = project(&[record(0x11, MON, DURATION), record(0x22, MON, DURATION)]);
+        let mut d = open(&raw);
+        d.apply_mixed(0, &[], &[rename(0x11, "Task17", "Earlier")], |_| true).unwrap();
+        let r = request(0x22, None, 1);
+        d.insert_above(1, &r, |_| true).unwrap();
+        d.apply_mixed(
+            2,
+            &[ScalarEdit::TaskDuration { task_guid: r.task_guid.clone(), expected_storage: DURATION, value_storage: 57_600 }],
+            &[rename(0x77, &r.name, "First")],
+            |_| true,
+        )
+        .unwrap();
+        d.apply_structural(3, &[], &[], &[movement(1, 0)], |_| true).unwrap();
+        d.apply_mixed(4, &[], &[rename(0x77, "First", "Final")], |_| true).unwrap();
+        let reparent = hierarchy::Reparent { parent_guid: Some(id(0x11)), ..movement(0, 0) };
+        d.apply_structural(5, &[], &[], &[reparent], |_| true).unwrap();
+        let c = d.authored_candidate(|_| true).unwrap();
+        let parsed = tasks(&payload(&c.bytes), &mut |_| true).unwrap();
+        assert_eq!(parsed.iter().map(|t| t.guid.clone()).collect::<Vec<_>>(), [id(0x11), id(0x77), id(0x22)]);
+        assert_eq!(parsed[0].name, "Earlier");
+        assert_eq!(parsed[1].name, "Final");
+        assert_eq!(parsed[1].parent_guid, Some(id(0x11)));
+        assert_eq!(parsed[1].duration_storage_scalar, 57_600);
+        assert_eq!(d.structural_edit_count(), 3);
+        assert_eq!(d.creation_count(), 1);
+        let receipt = serde_json::to_value(c.receipt).unwrap();
+        assert_eq!(receipt["version"], 5);
+        let mut hash = receipt["prefix"]["output_sha256"].as_str().unwrap().to_owned();
+        let stages = receipt["stages"].as_array().unwrap();
+        assert_eq!(stages.iter().map(|s| s["kind"].as_str().unwrap()).collect::<Vec<_>>(), ["create", "fields", "order", "fields", "hierarchy"]);
+        for stage in stages {
+            assert_eq!(stage_hash(stage, "source_sha256"), hash);
+            hash = stage_hash(stage, "output_sha256");
+            assert_eq!(stage["receipt"]["native_reopen_verified"], false);
+        }
+        assert_eq!(hash, receipt["output_sha256"]);
+        assert_eq!(hash, writer::hash(&c.bytes, &mut |_| true).unwrap());
+        assert!(d.candidate(|_| true).is_err() && d.ordered_candidate(|_| true).is_err() && d.structural_candidate(|_| true).is_err());
+    }
+    #[test]
+    fn stable_creation_identity_undo_redo_branching_and_failed_edits_are_atomic() {
+        let raw = project(&[record(0x11, MON, DURATION)]);
+        let mut d = open(&raw);
+        let r = request(0x11, None, 0);
+        d.insert_above(0, &r, |_| true).unwrap();
+        let created = d.bytes(|_| true).unwrap();
+        assert!(d.insert_above(1, &r, |_| true).is_err());
+        assert!(d.apply_mixed(0, &[], &[rename(0x77, &r.name, "Stale")], |_| true).is_err());
+        assert!(d.apply_mixed(1, &[], &[rename(0x77, "Wrong", "Rejected")], |_| true).is_err());
+        assert!(d.apply_structural(1, &[], &[], &[movement(1, 0)], |_| true).is_err());
+        assert!(d.apply_mixed(1, &[], &[rename(0x77, &r.name, "Cancelled")], |_| false).is_err());
+        assert_eq!(d.revision, 1);
+        assert_eq!(d.bytes(|_| true).unwrap(), created);
+        d.undo(1).unwrap();
+        assert_eq!(d.bytes(|_| true).unwrap(), raw);
+        assert!(!d.has_creation_edits() && !d.is_dirty());
+        d.redo(2).unwrap();
+        assert_eq!(d.bytes(|_| true).unwrap(), created);
+        d.apply_mixed(3, &[], &[rename(0x77, &r.name, "Branch A")], |_| true).unwrap();
+        d.undo(4).unwrap();
+        d.apply_mixed(5, &[], &[rename(0x77, &r.name, "Branch B")], |_| true).unwrap();
+        assert!(!d.can_redo());
+        assert!(d.creates_task(&r.task_guid.to_uppercase()));
+        let parsed = tasks(&payload(&d.bytes(|_| true).unwrap()), &mut |_| true).unwrap();
+        assert_eq!(parsed[0].name, "Branch B");
+        assert_eq!(parsed[0].guid, r.task_guid);
+    }
+    #[test]
+    fn consecutive_field_groups_merge_against_segment_input_and_remove_reverted_fields() {
+        let raw = project(&[record(0x11, MON, DURATION)]);
+        let mut d = open(&raw);
+        let r = request(0x11, None, 0);
+        d.insert_above(0, &r, |_| true).unwrap();
+        d.apply_mixed(1, &[], &[rename(0x77, &r.name, "One")], |_| true).unwrap();
+        d.apply_mixed(2, &[], &[rename(0x77, "One", "Two")], |_| true).unwrap();
+        assert_eq!(d.edit_count(), 2);
+        let v = serde_json::to_value(d.authored_candidate(|_| true).unwrap().receipt).unwrap();
+        assert_eq!(v["stages"].as_array().unwrap().len(), 2);
+        d.apply_mixed(3, &[], &[rename(0x77, "Two", &r.name)], |_| true).unwrap();
+        assert_eq!(d.edit_count(), 1);
+        let direct = apply(&raw, &r);
+        assert_eq!(d.bytes(|_| true).unwrap(), direct.bytes);
+    }
+    #[test]
+    fn assigned_creation_retains_scope_and_reparent_refuses_without_history_change() {
+        let raw = assigned_project(&[assigned_record(0x11, MON, 86_400, 1)]);
+        let mut d = open(&raw);
+        let r = request(0x11, None, 0);
+        d.insert_above(0, &r, |_| true).unwrap();
+        let c = d.authored_candidate(|_| true).unwrap();
+        assert_eq!(serde_json::to_value(c.receipt).unwrap()["stages"][0]["receipt"]["source_scope"], "flat_planned_single_assignments");
+        let parent = hierarchy::Reparent { parent_guid: Some(id(0x11)), ..movement(0, 0) };
+        assert!(d.apply_structural(1, &[], &[], &[parent], |_| true).is_err());
+        assert_eq!(d.revision, 1);
+        assert_eq!(d.bytes(|_| true).unwrap(), c.bytes);
+    }
+    #[test]
+    fn creation_replay_and_legacy_prefix_share_eight_structural_operation_limit() {
+        let raw = project(&[record(0x11, MON, DURATION), record(0x22, MON, DURATION)]);
+        let mut d = open(&raw);
+        d.insert_above(0, &request(0x11, None, 0), |_| true).unwrap();
+        for revision in 1..8 {
+            let (from, to) = if revision % 2 == 1 { (0, 1) } else { (1, 0) };
+            d.apply_structural(revision, &[], &[], &[movement(from, to)], |_| true).unwrap();
+        }
+        assert_eq!(d.structural_edit_count(), 8);
+        let before = d.bytes(|_| true).unwrap();
+        assert!(d.apply_structural(8, &[], &[], &[movement(1, 0)], |_| true).is_err());
+        assert_eq!(d.revision, 8);
+        assert_eq!(d.bytes(|_| true).unwrap(), before);
+    }
+    #[test]
+    fn legacy_prefix_operations_and_fields_count_toward_replay_limits() {
+        let raw = project(&[record(0x11, MON, DURATION), record(0x22, MON, DURATION)]);
+        let mut d = open(&raw);
+        let prefix: Vec<_> = (0..7)
+            .map(|i| hierarchy::Reparent {
+                task_guid: id(0x11),
+                expected_parent_guid: None,
+                expected_sibling_index: i % 2,
+                parent_guid: None,
+                sibling_index: 1 - i % 2,
+            })
+            .collect();
+        d.apply_structural(0, &[], &[], &prefix, |_| true).unwrap();
+        d.insert_above(1, &request(0x11, None, 1), |_| true).unwrap();
+        assert_eq!(d.structural_edit_count(), 8);
+        assert!(d.apply_structural(2, &[], &[], &[movement(1, 0)], |_| true).is_err());
+        assert_eq!(d.revision, 2);
+
+        let rows: Vec<_> = (1..=70).map(|i| record(i, MON, DURATION)).collect();
+        let raw = project(&rows);
+        let mut d = open(&raw);
+        let fields: Vec<_> = (1..=70)
+            .flat_map(|i| {
+                [
+                    rename(i, &format!("Task{i}"), &format!("Prefix{i}")),
+                    TextEdit::TaskDisplayId { task_guid: id(i), expected: format!("ID{i}"), value: format!("PREFIX-{i}") },
+                ]
+            })
+            .collect();
+        d.apply_mixed(0, &[], &fields, |_| true).unwrap();
+        d.insert_above(1, &request(0x11, None, 16), |_| true).unwrap();
+        let before = d.bytes(|_| true).unwrap();
+        let fields: Vec<_> = (1..=70)
+            .flat_map(|i| {
+                [
+                    rename(i, &format!("Prefix{i}"), &format!("After{i}")),
+                    TextEdit::TaskDisplayId { task_guid: id(i), expected: format!("PREFIX-{i}"), value: format!("AFTER-{i}") },
+                ]
+            })
+            .collect();
+        assert!(d.apply_mixed(2, &[], &fields, |_| true).is_err());
+        assert_eq!(d.revision, 2);
+        assert_eq!(d.bytes(|_| true).unwrap(), before);
+    }
+    #[test]
+    fn creation_history_limit_and_branch_after_undo_remain_shared() {
+        let raw = project(&[record(0x11, MON, DURATION)]);
+        let mut d = open(&raw);
+        let r = request(0x11, None, 0);
+        d.insert_above(0, &r, |_| true).unwrap();
+        let mut name = r.name.clone();
+        for revision in 1..64 {
+            let next = format!("Revision {revision}");
+            d.apply_mixed(revision, &[], &[rename(0x77, &name, &next)], |_| true).unwrap();
+            name = next;
+        }
+        assert!(d.apply_mixed(64, &[], &[rename(0x77, &name, "Over budget")], |_| true).is_err());
+        assert_eq!(d.revision, 64);
+        d.undo(64).unwrap();
+        d.apply_mixed(65, &[], &[rename(0x77, "Revision 62", "New branch")], |_| true).unwrap();
+        assert!(!d.can_redo());
+        assert_eq!(d.revision, 66);
+    }
+    #[test]
+    fn real_text_payload_history_budget_rejects_atomically_before_transaction_limit() {
+        let ids = [0x11, 0x22, 0x33, 0x44, 0x55];
+        let raw = project(&ids.iter().map(|&i| record(i, MON, DURATION)).collect::<Vec<_>>());
+        let mut d = open(&raw);
+        let r = request(0x11, None, 0);
+        d.insert_above(0, &r, |_| true).unwrap();
+        let mut names: Vec<_> = ids.iter().map(|i| (*i, format!("Task{i}"))).chain([(0x77, r.name)]).collect();
+        let long = "\u{0e07}".repeat(16_000);
+        let mut rejected = false;
+        for revision in 1..64 {
+            let name = format!("{long}{revision}");
+            let edits: Vec<_> = names.iter().map(|(i, expected)| rename(*i, expected, &name)).collect();
+            let before = d.bytes(|_| true).unwrap();
+            match d.apply_mixed(revision, &[], &edits, |_| true) {
+                Ok(()) => names.iter_mut().for_each(|(_, old)| *old = name.clone()),
+                Err(error) => {
+                    assert!(error.contains("16 MiB"), "{error}");
+                    assert_eq!(d.revision, revision);
+                    assert_eq!(d.bytes(|_| true).unwrap(), before);
+                    rejected = true;
+                    break;
+                }
+            }
+        }
+        assert!(rejected);
+    }
+}
+
 #[test]
 fn root_insertion_uses_default_duration_anchor_date_and_independent_identities() {
     let raw = project(&[record(0x44, WED, DURATION), record(0x11, MON, DURATION), record(0x22, WED, 57_600)]);

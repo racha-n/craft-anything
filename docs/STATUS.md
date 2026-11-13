@@ -307,6 +307,21 @@ hashes unchanged. The canonical viewer verifier is reused; the desktop is not
 rebuilt. Shared creation draft/UI and generic native Save remain pending.
 See [the version-2 contract](4d5d-completion.md#assigned-root-default-work-candidates-version-2).
 
+### Creation-aware draft replay (R3.14)
+
+The shared draft accepts explicit guarded default Work insertion, preserves
+chronological edits to new tasks and exports typed version-5 stage receipts; legacy
+drafts retain their existing exports. Eight format/seven engine draft regressions
+and all twelve frozen checks pass, with 2,542 formats/engine target tests
+(19 ignored). The current CLI passes 52 persistent MCP calls, six schema/hash-chain
+exports, three creation-only byte identities and nineteen guarded refusals. Two
+chronological CLI files pass native Save As/unload/reopen and 492 full General
+comparisons. Eight declared phase/cost/bounds comparisons, two mesh instances/one
+definition, two viewer/two native images and 57 protected source hashes pass. The
+canonical viewer verifier is reused; the desktop is not rebuilt. Shared creation
+forms/hints, generated identities, deletion and generic native Save remain pending.
+See [the draft contract](4d5d-completion.md#chronological-creation-draft-candidates-version-5).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

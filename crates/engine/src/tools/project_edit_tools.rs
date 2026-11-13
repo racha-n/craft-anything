@@ -9,7 +9,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::ToolError;
-use craft_anything_formats::sp_project::{self, draft::Draft, hierarchy, relocation, task_strings::TextEdit, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{self, creation, draft::Draft, hierarchy, relocation, task_strings::TextEdit, writer::ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -57,6 +57,12 @@ enum Request {
         #[serde(default)]
         focus_task_guid: Option<String>,
     },
+    InsertAbove {
+        draft_id: u64,
+        expected_source_sha256: String,
+        revision: u64,
+        insertion: creation::InsertAbove,
+    },
     Undo {
         draft_id: u64,
         expected_source_sha256: String,
@@ -90,7 +96,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound field/order/hierarchy draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. At most eight sequential task relocations; native saving and general rescheduling remain separate gates.",
+        "Open a source-bound draft, apply guarded fields/order/hierarchy or default Work insertion with atomic bounded history, undo/redo and separate candidate export. Creation-aware exports retain chronological version-5 stages; earlier exports keep their versions. At most eight total insertions/relocations; native saving and general rescheduling remain separate gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -124,6 +130,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             let (id, expected, revision) = match &request {
                 Request::Inspect { draft_id, expected_source_sha256, revision, .. }
                 | Request::Apply { draft_id, expected_source_sha256, revision, .. }
+                | Request::InsertAbove { draft_id, expected_source_sha256, revision, .. }
                 | Request::Undo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Redo { draft_id, expected_source_sha256, revision, .. }
                 | Request::Close { draft_id, expected_source_sha256, revision, .. }
@@ -162,9 +169,15 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             }
             focus = focus_task_guid;
         }
+        Request::InsertAbove { revision, insertion, .. } => {
+            session.draft.insert_above(revision, &insertion, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            focus = Some(insertion.task_guid);
+        }
         Request::Undo { revision, focus_task_guid, .. } => {
+            let created_focus = focus_task_guid.as_deref().is_some_and(|id| session.draft.creates_task(id));
             session.draft.undo(revision).map_err(ToolError::invalid)?;
-            focus = focus_task_guid;
+            // Undoing an insertion removes its GUID; fall back to the first page.
+            focus = focus_task_guid.filter(|id| !created_focus || session.draft.creates_task(id));
         }
         Request::Redo { revision, focus_task_guid, .. } => {
             session.draft.redo(revision).map_err(ToolError::invalid)?;
@@ -172,6 +185,9 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         }
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
+            if session.draft.has_creation_edits() {
+                return write_authored(ctx, &session, &output_path, acknowledge_storage_only);
+            }
             if session.draft.has_hierarchy_edits() {
                 return project_candidate_tools::run_structured(
                     ctx,
@@ -267,7 +283,8 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let result = json!({"version":1,"draft_id":session.id,"source_sha256":session.draft.source_sha256,"draft_sha256":imported.source_sha256,
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
-        "order_edit_count":session.draft.structural_edits().len(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
+        "order_edit_count":session.draft.structural_edit_count(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
+        "creation_count":session.draft.creation_count(),"candidate_receipt_version":if session.draft.has_creation_edits() {5} else if session.draft.has_hierarchy_edits() {4} else if !session.draft.order_edits().is_empty() {3} else if !session.draft.text_edits().is_empty() {2} else {1},
         "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
         "task_collection_lookup":imported.coverage.task_collection_lookup,
         "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
@@ -278,6 +295,41 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     Ok(ToolOutput::Value(result))
 }
 
+fn write_authored(ctx: &mut Ctx<'_>, session: &EditSession, output_path: &str, acknowledged: bool) -> Result<ToolOutput, ToolError> {
+    use craft_anything_evidence::{Confidence, Limitation};
+    use sha2::{Digest, Sha256};
+    if !acknowledged {
+        return Err(ToolError::invalid("Acknowledge storage-only generation; native saving and scheduling remain unverified."));
+    }
+    let (output, receipt_path) = project_candidate_tools::output_paths(output_path)?;
+    let input = load_path(&session.path, 256 * 1024 * 1024)?;
+    if !format!("{:x}", Sha256::digest(&input.bytes)).eq_ignore_ascii_case(&session.draft.source_sha256) {
+        return Err(ToolError::invalid("Source changed; reload before exporting the draft."));
+    }
+    let candidate = session.draft.authored_candidate(|progress| {
+        ctx.report(Some(progress), "Replaying guarded task creation and edits");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(ToolError::invalid)?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = super::static_input::builder(ctx, "formats_project_edit", input.subject,
+        json!({"action":"write_candidate","draft_id":session.id,"revision":session.draft.revision,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,"acknowledge_storage_only":acknowledged}))
+        .summary("Prepared a chronological task-creation draft candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new("native_persistence_unverified", "Typed stage hash chains and internal guards passed. Native persistence, geometry and scheduling need independent acceptance."))
+        .target_content(true).build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    project_candidate_tools::publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +338,28 @@ mod tests {
 
     fn fixture() -> Vec<u8> {
         fixture_count(1)
+    }
+    #[test]
+    fn rejected_insertion_does_not_replace_the_current_draft_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.sp");
+        let raw = fixture();
+        std::fs::write(&source, &raw).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&raw));
+        let engine = Engine::new(crate::testing::session());
+        let call = |params| engine.call("formats_project_edit", params, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":source,"expected_source_sha256":hash})).unwrap();
+        let task = opened["tasks"][0]["guid"].as_str().unwrap();
+        let base = json!({"action":"inspect","draft_id":opened["draft_id"],"expected_source_sha256":hash,"revision":0});
+        let before = call(base.clone()).unwrap();
+        let mut insert = base.clone();
+        insert["action"] = json!("insert_above");
+        insert["insertion"] = json!({"template_task_guid":task,"anchor_task_guid":task,"expected_parent_guid":null,"expected_sibling_index":0,
+            "task_guid":"77777777-7777-7777-7777-777777777777","supply_chain_id":"78787878-7878-7878-7878-787878787878","name":"New Work","display_id":"NEW-1"});
+        // This otherwise readable source has no admitted default calendar/state definitions.
+        assert!(call(insert).is_err());
+        assert_eq!(call(base).unwrap(), before);
+        assert_eq!(std::fs::read(source).unwrap(), raw);
     }
     fn fixture_count(count: u8) -> Vec<u8> {
         let open = [0x7a, 0x54, 0xaf, 0x39];

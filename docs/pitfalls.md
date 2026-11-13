@@ -972,6 +972,12 @@ mangled by the shell several times. Write multi-line edit scripts to a file and 
 line endings, so a scripted size change rewrote 19 LF files with CRLF (git only warned). Write
 with `write_bytes(s.encode())` and check `git ls-files --eol -m` after scripted edits.
 
+**Comparing a checked-out file with a Git blob.** An untouched older receipt schema
+used CRLF in the worktree while its stored blob used LF, causing a raw hash comparison
+to fail. Freeze and compare the actual working bytes first. Check Git's canonical
+content separately, accounting for checkout line endings; do not rewrite the file
+merely to make an acceptance check pass.
+
 **A process search that found itself.** Looking for a helper by a word in its command line, with
 that word in the search's own command, listed the search: "a helper is left behind" after every
 run, with a new pid each time. The new pid was the clue. Build the pattern from parts

@@ -754,3 +754,64 @@ images pass; all 57 protected hashes stay unchanged. The canonical viewer verifi
 is reused without rebuilding, and the desktop is not rebuilt for this headless
 change. Native pixel/monetary/phase/transaction parity, shared creation draft/UI and
 generic native Save remain unadmitted.
+
+## Chronological creation draft candidates, version 5
+
+The shared `formats_project_edit` draft adds `insert_above`, accepting the same
+explicit `insertion` request as the default Work storage candidate. Source hash,
+draft identity and revision guard the transaction. Successful insertion focuses its
+new GUID. Undo removes the row and falls back when that row held focus; redo reuses
+the same task/Supply Chain identities. A failed edit, focus resolution or cancelled
+transaction publishes no new draft revision. The source and loaded scene caches
+remain separate from draft bytes.
+
+Before the first insertion, existing field/order/hierarchy replay and export
+versions remain unchanged. The first insertion freezes that legacy prefix and
+starts chronological replay. Subsequent fields bind to the current intermediate
+file; adjacent field transactions merge against their segment input. Insertions
+and relocations separate segments, so editing or moving a newly created GUID runs
+after its creation. Each codec keeps its own admission: creation on flat assigned
+roots does not enable their unsupported hierarchy relocation.
+
+History retains one original byte allocation and bounded semantic recipes, without
+keeping a full SP file for each version. All segments and the legacy prefix share
+256 edits, eight structural operations, 64 transactions and a 16 MiB cumulative
+edit-payload budget. Insertions consume structural capacity. Undo branches discard
+redo history. Current snapshots add `creation_count` and
+`candidate_receipt_version`; `order_edit_count` includes insertions and relocations.
+
+Creation-aware export rechecks the on-disk original source hash, writes a separate
+candidate and publishes a [version-5 receipt](schemas/sp-authored-candidate-receipt-v5.schema.json)
+without replacing existing candidate/receipt files. Its typed version-4 `prefix`
+and `stages` (`create`, `fields`, `order`, `hierarchy`) retain the underlying receipts
+and a complete source/output hash chain. Legacy export methods refuse a draft that
+contains creation, preventing silent loss of chronological stages. Native reopen
+and schedule-consistency flags stay false.
+
+The older Rust field/relocation accessors and `has_hierarchy_edits` describe the
+legacy prefix. They do not flatten chronological stages into baseline-relative
+edits. Creation-aware consumers use `has_creation_edits`, total edit/structural
+counts and `authored_candidate`; the engine chooses that export before legacy
+routing. Current row positions and parent hints come from reparsed draft bytes.
+
+Eight focused format regressions pass, including create/edit/move/reparent chains,
+prefix/global limits, stable identities, failed/stale/cancelled transactions,
+undo/redo branching and actual text-payload history exhaustion. Seven engine draft
+regressions pass. All twelve frozen checks pass with 2,542 formats/engine all-target
+tests (19 ignored), strict clippy, layers, locks, staged secrets, tools, wasm,
+doctests and formatting. All prior receipt schemas remain byte-identical.
+
+The current CLI runs 52 persistent MCP calls across root, child and assigned-root
+cases. Six version-5 exports validate against the schema and recursive hash chains;
+three creation-only files remain fully byte-identical to accepted v2 files. Nineteen
+refusals preserve revision/output state, including stale/expected-field/focus guards,
+unsupported hierarchy, missing acknowledgement, no-clobber and on-disk source change.
+Two chronological CLI files pass native Save As/unload/reopen with exact Tasks bytes
+and 492 full General comparisons against prior native controls, with only the
+explicit new names changed. Each CLI candidate preserves the 47 non-Tasks source
+sections; native transaction/presentation updates remain separate. Eight declared
+phase/cost/bounds comparisons, two mesh instances/one definition, two fresh viewer
+images and two native images pass; all 57 protected hashes remain unchanged. The
+canonical viewer verifier is reused, and the desktop is not rebuilt for this
+headless change. Shared creation forms, generated identities, read-only creation
+availability, deletion and generic native Save remain pending.

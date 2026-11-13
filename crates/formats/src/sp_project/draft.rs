@@ -7,12 +7,14 @@ use super::{
 use std::sync::Arc;
 
 const HISTORY_PAYLOAD_LIMIT: usize = 16 * 1024 * 1024;
-#[derive(Default)]
+pub mod replay;
+#[derive(Clone, Default)]
 struct Version {
     scalars: Vec<ScalarEdit>,
     texts: Vec<TextEdit>,
     orders: Vec<relocation::Move>,
     relocations: Vec<hierarchy::Reparent>,
+    replay: Vec<replay::Operation>,
     payload_bytes: usize,
 }
 #[derive(Clone)]
@@ -39,7 +41,31 @@ impl Draft {
         self.versions.get(self.cursor).map(|v| v.texts.as_slice()).unwrap_or_default()
     }
     pub fn edit_count(&self) -> usize {
-        self.edits().len().saturating_add(self.text_edits().len()).saturating_add(self.structural_edits().len())
+        let (fields, structural) = self.replay_counts();
+        self.edits()
+            .len()
+            .saturating_add(self.text_edits().len())
+            .saturating_add(self.structural_edits().len())
+            .saturating_add(fields)
+            .saturating_add(structural)
+    }
+    fn replay_counts(&self) -> (usize, usize) {
+        replay::counts(self.operations())
+    }
+    fn operations(&self) -> &[replay::Operation] {
+        self.versions.get(self.cursor).map(|v| v.replay.as_slice()).unwrap_or_default()
+    }
+    pub fn has_creation_edits(&self) -> bool {
+        !self.operations().is_empty()
+    }
+    pub fn structural_edit_count(&self) -> usize {
+        self.structural_edits().len().saturating_add(self.replay_counts().1)
+    }
+    pub fn creation_count(&self) -> usize {
+        self.operations().iter().filter(|o| matches!(o, replay::Operation::Create(_))).count()
+    }
+    pub fn creates_task(&self, guid: &str) -> bool {
+        self.operations().iter().any(|o| matches!(o, replay::Operation::Create(r) if r.task_guid.eq_ignore_ascii_case(guid)))
     }
     pub fn order_edits(&self) -> &[relocation::Move] {
         self.versions.get(self.cursor).map(|v| v.orders.as_slice()).unwrap_or_default()
@@ -54,7 +80,7 @@ impl Draft {
         self.cursor > 0
     }
     pub fn is_dirty(&self) -> bool {
-        !self.edits().is_empty() || !self.text_edits().is_empty() || !self.structural_edits().is_empty()
+        self.has_creation_edits() || !self.edits().is_empty() || !self.text_edits().is_empty() || !self.structural_edits().is_empty()
     }
     pub fn can_redo(&self) -> bool {
         self.cursor.checked_add(1).is_some_and(|n| n < self.versions.len())
@@ -66,21 +92,36 @@ impl Draft {
         self.revision.checked_add(1).ok_or_else(|| "Draft revision exhausted".into())
     }
     pub fn candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<mixed::Candidate, String> {
+        self.require_legacy_export()?;
         if !self.structural_edits().is_empty() {
             return Err("This draft has task relocations; use its ordered or structured candidate export".into());
         }
         mixed::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), keep).map_err(error)
     }
     pub fn ordered_candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<ordered::Candidate, String> {
+        self.require_legacy_export()?;
         if self.has_hierarchy_edits() {
             return Err("This draft has parent changes; export its version-4 structured candidate".into());
         }
         ordered::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.order_edits(), keep).map_err(error)
     }
     pub fn structural_candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<structured::Candidate, String> {
+        self.require_legacy_export()?;
         structured::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.structural_edits(), keep).map_err(error)
     }
+    fn require_legacy_export(&self) -> Result<(), String> {
+        if self.has_creation_edits() {
+            return Err("This draft creates tasks; export its version-5 chronological candidate".into());
+        }
+        Ok(())
+    }
+    pub fn authored_candidate(&self, keep: impl FnMut(f32) -> bool) -> Result<replay::Candidate, String> {
+        replay::candidate(&self.original, &self.source_sha256, self.edits(), self.text_edits(), self.structural_edits(), self.operations(), keep).map_err(error)
+    }
     pub fn bytes(&self, keep: impl FnMut(f32) -> bool) -> Result<Vec<u8>, String> {
+        if self.has_creation_edits() {
+            return self.authored_candidate(keep).map(|c| c.bytes);
+        }
         if !self.is_dirty() {
             return Ok(self.original.to_vec());
         }
@@ -132,6 +173,9 @@ impl Draft {
         relocations: &[hierarchy::Reparent],
         mut keep: impl FnMut(f32) -> bool,
     ) -> Result<(), String> {
+        if self.has_creation_edits() {
+            return self.apply_replay(revision, edits, texts, relocations, None, &mut keep);
+        }
         let next = self.check_revision(revision)?;
         if edits.is_empty() && texts.is_empty() && relocations.is_empty() {
             return Err("Choose at least one draft edit".into());
@@ -208,9 +252,83 @@ impl Draft {
         } else {
             Vec::new()
         };
-        self.versions.push(Arc::new(Version { scalars, texts: merged_texts, orders, relocations: merged_relocations, payload_bytes }));
+        self.versions.push(Arc::new(Version { scalars, texts: merged_texts, orders, relocations: merged_relocations, replay: Vec::new(), payload_bytes }));
         self.cursor += 1;
         self.revision = next;
+        Ok(())
+    }
+    pub fn insert_above(&mut self, revision: u64, request: &super::creation::InsertAbove, mut keep: impl FnMut(f32) -> bool) -> Result<(), String> {
+        self.apply_replay(revision, &[], &[], &[], Some(request), &mut keep)
+    }
+    fn apply_replay(
+        &mut self,
+        revision: u64,
+        scalars: &[ScalarEdit],
+        texts: &[TextEdit],
+        relocations: &[hierarchy::Reparent],
+        insertion: Option<&super::creation::InsertAbove>,
+        keep: &mut dyn FnMut(f32) -> bool,
+    ) -> Result<(), String> {
+        let next_revision = self.check_revision(revision)?;
+        if self.cursor >= 64 {
+            return Err("Draft history is limited to 64 transactions; export before starting another draft".into());
+        }
+        if scalars.is_empty() && texts.is_empty() && relocations.is_empty() && insertion.is_none() {
+            return Err("Choose at least one draft edit".into());
+        }
+        if scalars.len().saturating_add(texts.len()).saturating_add(relocations.len()) > 256 || relocations.len() > ordered::ORDER_LIMIT {
+            return Err("Choose at most 256 edits including eight structural operations".into());
+        }
+        let current = self.bytes(&mut *keep)?;
+        let parsed = parse_metadata(&current, &mut *keep).map_err(error)?;
+        // Validate each new transaction against the current revision before merging recipes.
+        if let Some(request) = insertion {
+            super::creation::candidate(&current, &parsed.source_sha256, request, &mut *keep).map_err(error)?;
+        } else {
+            validate(&current, &parsed.source_sha256, scalars, texts, relocations, keep)?;
+        }
+        let mut version = self.versions.get(self.cursor).ok_or_else(|| "Draft history missing".to_owned())?.as_ref().clone();
+        if !scalars.is_empty() || !texts.is_empty() {
+            if let Some(replay::Operation::Fields { scalars: merged, texts: merged_texts }) = version.replay.last_mut() {
+                merge_fields(merged, merged_texts, scalars, texts)?;
+            } else {
+                let mut merged = Vec::new();
+                let mut merged_texts = Vec::new();
+                merge_fields(&mut merged, &mut merged_texts, scalars, texts)?;
+                version.replay.push(replay::Operation::Fields { scalars: merged, texts: merged_texts });
+            }
+        }
+        version.replay.extend(
+            relocations
+                .iter()
+                .filter(|r| {
+                    !structured::same_parent(r.expected_parent_guid.as_deref(), r.parent_guid.as_deref()) || r.expected_sibling_index != r.sibling_index
+                })
+                .cloned()
+                .map(replay::Operation::Relocate),
+        );
+        if let Some(request) = insertion {
+            version.replay.push(replay::Operation::Create(request.clone()));
+        }
+        replay::candidate(&self.original, &self.source_sha256, &version.scalars, &version.texts, &version.relocations, &version.replay, &mut *keep)
+            .map_err(error)?;
+        let base = payload_cost(&version.scalars, &version.texts)?
+            .checked_add(version.relocations.len().checked_mul(1024).ok_or_else(|| "Draft relocation payload overflow".to_owned())?)
+            .ok_or_else(|| "Draft payload overflow".to_owned())?;
+        version.payload_bytes = base.checked_add(replay::payload(&version.replay)?).ok_or_else(|| "Draft payload overflow".to_owned())?;
+        let retained = self
+            .versions
+            .iter()
+            .take(self.cursor + 1)
+            .try_fold(0usize, |n, v| n.checked_add(v.payload_bytes))
+            .ok_or_else(|| "Draft history payload overflow".to_owned())?;
+        if retained.checked_add(version.payload_bytes).is_none_or(|n| n > HISTORY_PAYLOAD_LIMIT) {
+            return Err("Draft history exceeds the 16 MiB edit-payload budget; export before starting another draft".into());
+        }
+        self.versions.truncate(self.cursor + 1);
+        self.versions.push(Arc::new(version));
+        self.cursor += 1;
+        self.revision = next_revision;
         Ok(())
     }
     pub fn undo(&mut self, revision: u64) -> Result<(), String> {
@@ -231,6 +349,27 @@ impl Draft {
         self.revision = next;
         Ok(())
     }
+}
+fn merge_fields(scalars: &mut Vec<ScalarEdit>, texts: &mut Vec<TextEdit>, edits: &[ScalarEdit], new_texts: &[TextEdit]) -> Result<(), String> {
+    for edit in edits {
+        let key = identity(edit);
+        if let Some(old) = scalars.iter_mut().find(|old| identity(old) == key) {
+            *old = baseline_expected(edit.clone(), old);
+        } else {
+            scalars.push(edit.clone());
+        }
+    }
+    scalars.retain(|e| !unchanged(e));
+    for edit in new_texts {
+        let key = text_identity(edit);
+        if let Some(old) = texts.iter_mut().find(|old| text_identity(old) == key) {
+            *old = baseline_text_expected(edit.clone(), old)?;
+        } else {
+            texts.push(edit.clone());
+        }
+    }
+    texts.retain(|e| !unchanged_text(e));
+    Ok(())
 }
 fn validate(
     raw: &[u8],
