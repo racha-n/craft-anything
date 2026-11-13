@@ -192,6 +192,28 @@ builds, 2,754 target tests (25 ignored), clippy, layers, locks, secrets, tools, 
 doctests and formatting. All 57 protected source hashes remained unchanged.
 See [the contract](4d5d-completion.md#sequential-field-order-and-hierarchy-drafts).
 
+### Read-only task lookup inspection (R3.14)
+
+A metadata-only engine tool reports task framing independently of collection GUID
+lookup consistency. Version-4 metadata adds a version-1 coverage report with checked
+and mismatched entry/collection counts; native row identity remains unverified.
+Readable task bodies survive invalid indices, while structural writers still reject
+them. The shared bounded validator supports the reader's 10,000-task limit and cancellation.
+The inspector leaves source files, existing drafts and scene caches unchanged.
+
+Focused checks passed 63 format regressions, six draft/inspection tests, six metadata
+tool tests and strict all-target clippy. The new CLI classified nine retained native
+controls as valid and both known negative files as invalid, passing report schemas
+without changing inputs. Both structural candidates remained byte-identical to the
+previously native-accepted outputs; that native proof is reused by exact byte identity,
+with no new native UI run for this inspection change. All ten frozen checks passed,
+including main/CLI builds, 2,516 formats/engine target tests (19 ignored), clippy,
+layers, locks, secrets, tools, wasm, doctests and formatting. Source provenance matched
+the retained native hashes; both negative inputs retained their baseline task pages,
+and all 57 protected sources stayed unchanged. Coverage propagation into existing
+scene/task/frame views remains separately pending, with missing older-bundle coverage
+kept unknown. See [the contract](4d5d-completion.md#read-only-task-lookup-coverage).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

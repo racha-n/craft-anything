@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Observed SP task collection lookup validation version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "status", "collections_checked", "entries_checked", "mismatched_collections", "mismatched_entries", "native_row_identity_verified"],
+  "properties": {
+    "version": {"const": 1},
+    "status": {"enum": ["valid", "invalid"]},
+    "collections_checked": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "entries_checked": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "mismatched_collections": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "mismatched_entries": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "native_row_identity_verified": {"const": false}
+  },
+  "description": "Counts cover entries in nonempty retained task collections. Empty collections add no checked groups or entries. Validity is distinct from task framing and does not verify native row identity. Metadata containing this report remains version 4; the new coverage field is additive. Missing reports in older bundles convey no lookup validation."
+}

@@ -517,3 +517,35 @@ All 11 frozen checks passed: main/CLI builds, ten widget cases, 2,754 target tes
 and formatting. All 57 protected source hashes remained unchanged. These proofs
 cover the declared small Planned/unassociated subset; they do not admit general
 native saving, task creation/deletion or scheduler parity.
+
+## Read-only task lookup coverage
+
+`formats_project_metadata_inspect` reads an explicit project path without geometry
+or changing an open draft, scene or source file. It reports task-record framing
+separately from collection GUID lookup consistency. The bounded summary contains
+counts and source SHA-256 rather than repeating every task body.
+
+Version-4 metadata gains the additive `coverage.task_collection_lookup` field.
+Its version-1 report uses `valid`/`invalid`, checked-entry/collection counts and
+mismatch counts. Nonempty collections contribute checked groups; empty collections
+contribute no entries or groups. The reader retains physically readable task bodies
+when lookup entries are inconsistent. Structural writers continue rejecting such
+sources. Validation covers the reader's 10,000-task limit independently of the
+512-task structural writer subset, with cooperative cancellation.
+
+The report schema is [version 1](schemas/sp-task-lookup-validation-v1.schema.json).
+Native row identity stays unverified even for consistent entries. A missing report
+in an older prepared bundle conveys no lookup validation. Existing scene/task/frame
+views need separate coverage propagation before broader row-identity admission.
+Focused checks passed 63 format regressions, six draft/inspection cases, six metadata
+tool cases and strict all-target clippy. The new CLI classified nine retained native
+controls and both known negative inputs correctly, with unchanged source hashes and
+valid report schemas. The negative inputs still retain their readable task bodies;
+their lookup report explicitly warns about native duplicate/missing rows. Fresh
+structural outputs stayed byte-identical to the two previously native-accepted
+candidates, so that proof is reused by exact byte identity. No new native UI run was
+performed for this inspection extension. All ten frozen checks passed, including
+main/CLI builds, 2,516 formats/engine target tests (19 ignored), strict clippy,
+layers, locks, secrets, tools, wasm, doctests and formatting. Retained native source
+hashes matched all corpus inputs; both negative task pages still matched their
+baseline. All 57 protected sources remained unchanged.

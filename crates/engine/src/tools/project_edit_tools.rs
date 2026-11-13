@@ -337,6 +337,58 @@ mod tests {
         raw
     }
     #[test]
+    fn metadata_inspection_reports_bad_lookup_without_replacing_a_draft_or_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.sp");
+        let bad_path = dir.path().join("bad-lookup.sp");
+        let raw = fixture_count(3);
+        let imported = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let start = 2344;
+        let end = u64::from_le_bytes(raw[128..136].try_into().unwrap()) as usize;
+        // This fixture uses one stored deflate block; rebuild its checksum after corruption.
+        let mut task_data = raw[start + 14..end - 4].to_vec();
+        assert_eq!(task_data.len(), imported.metadata["sections"]["Tasks"]["decoded_bytes"].as_u64().unwrap() as usize);
+        let task = &imported.metadata["tasks"][0];
+        let at = (task["offset"].as_u64().unwrap() + task["bytes"].as_u64().unwrap() - 4) as usize;
+        task_data[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut stored = b"\x01\x05Tasks".to_vec();
+        stored.extend(craft_anything_testkit::games::zlib_stored(&task_data));
+        assert_eq!(stored.len(), end - start);
+        let mut bad = raw.clone();
+        bad[start..end].copy_from_slice(&stored);
+        std::fs::write(&source, &raw).unwrap();
+        std::fs::write(&bad_path, &bad).unwrap();
+        let engine = Engine::new(crate::testing::session());
+        let call = |id, params| engine.call(id, params, CallOptions::new(Caller::Cli)).map(|o| o.to_json());
+        let before = call("formats_project_tasks_list", json!({"path":source})).unwrap()["result"].clone();
+        let opened =
+            call("formats_project_edit", json!({"action":"open","path":source,"expected_source_sha256":imported.source_sha256})).unwrap()["result"].clone();
+        let inspected = call("formats_project_metadata_inspect", json!({"path":bad_path})).unwrap();
+        let result = &inspected["result"];
+        assert_eq!(result["version"], 1);
+        assert_eq!(result["task_count"], 3);
+        assert_eq!(result["task_record_framing_validated"], true);
+        assert_eq!(result["coverage"]["geometry_validated"], false);
+        let lookup = &result["coverage"]["task_collection_lookup"];
+        assert_eq!(lookup["status"], "invalid");
+        assert_eq!(lookup["entries_checked"], 3);
+        assert_eq!(lookup["mismatched_entries"], 1);
+        assert_eq!(lookup["native_row_identity_verified"], false);
+        assert!(inspected["limitations"].as_array().unwrap().iter().any(|v| v["code"] == "invalid_task_lookup"));
+        let valid = call("formats_project_metadata_inspect", json!({"path":source})).unwrap();
+        assert_eq!(valid["result"]["coverage"]["task_collection_lookup"]["status"], "valid");
+        let draft = call(
+            "formats_project_edit",
+            json!({"action":"inspect","draft_id":opened["draft_id"],"revision":0,"expected_source_sha256":imported.source_sha256}),
+        )
+        .unwrap();
+        assert_eq!(draft["result"]["draft_sha256"], imported.source_sha256);
+        assert_eq!(draft["result"]["dirty"], false);
+        assert_eq!(call("formats_project_tasks_list", json!({"path":source})).unwrap()["result"], before);
+        assert_eq!(std::fs::read(source).unwrap(), raw);
+        assert_eq!(std::fs::read(bad_path).unwrap(), bad);
+    }
+    #[test]
     fn hierarchy_hints_cross_pages_and_same_preorder_parent_changes_stay_guarded() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hierarchy.sp");

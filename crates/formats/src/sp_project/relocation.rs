@@ -104,36 +104,9 @@ pub(super) fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -
 }
 // The collection interleaves each task body with one entry of its GUID-sorted
 // lookup vector. An entry belongs to its collection slot, not to that task.
-pub(super) fn lookup_indices(data: &[u8], siblings: &[&Task]) -> Result<Vec<u32>> {
-    let mut keys = Vec::new();
-    for (index, task) in siblings.iter().enumerate() {
-        let key = bytes(data, checked_add(task.offset, 12)?, 16)?;
-        keys.push((key, u32::try_from(index).map_err(|_| fail("limit", "Sibling lookup index"))?));
-    }
-    keys.sort_by(|a, b| a.0.cmp(b.0));
-    Ok(keys.into_iter().map(|(_, index)| index).collect())
-}
-fn lookup_valid(data: &[u8], siblings: &[&Task]) -> Result<bool> {
-    for (task, index) in siblings.iter().zip(lookup_indices(data, siblings)?) {
-        let end = checked_add(task.offset, task.bytes)?;
-        let at = end.checked_sub(4).ok_or_else(|| fail("truncated", "Sibling lookup word"))?;
-        if bytes(data, at, 4)? != index.to_le_bytes() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-pub(super) fn all_lookups_valid(data: &[u8], tasks: &[Task]) -> Result<bool> {
-    let mut groups: BTreeMap<Option<&str>, Vec<&Task>> = BTreeMap::new();
-    for task in tasks {
-        groups.entry(task.parent_guid.as_deref()).or_default().push(task);
-    }
-    for siblings in groups.values() {
-        if !lookup_valid(data, siblings)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+pub(super) use super::task_lookup::lookup_indices;
+pub(super) fn all_lookups_valid(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<bool> {
+    Ok(task_lookup::audit(data, tasks, callback)?.status == task_lookup::Status::Valid)
 }
 /// Shared admission and complete sibling positions, independent of UI page boundaries.
 pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl FnMut(f32) -> bool) -> std::result::Result<Outline, FormatError> {
@@ -142,7 +115,7 @@ pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl Fn
         let data = container.decoded.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?.clone();
         let evidence = inspect_container(container, hash, false, &mut keep_going)?;
         let mut reason = scope(&evidence.tasks);
-        if reason.is_none() && !all_lookups_valid(&data, &evidence.tasks)? {
+        if reason.is_none() && !all_lookups_valid(&data, &evidence.tasks, &mut keep_going)? {
             reason = Some(ScopeReason::InvalidSiblingLookup);
         }
         let mut totals = BTreeMap::new();
@@ -191,7 +164,7 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
     if let Some(reason) = scope(&evidence.tasks) {
         return Err(fail(if matches!(reason, ScopeReason::TaskLimit) { "limit" } else { "unsupported_layout" }, reason.message()));
     }
-    if !all_lookups_valid(&data, &evidence.tasks)? {
+    if !all_lookups_valid(&data, &evidence.tasks, callback)? {
         return Err(fail("unsupported_layout", ScopeReason::InvalidSiblingLookup.message()));
     }
     let task = writer::task_for(&evidence.tasks, &request.task_guid)?;
@@ -238,7 +211,7 @@ fn inner(raw: &[u8], expected: &str, request: &Move, callback: &mut dyn FnMut(f3
     let parsed_container = container(&output, callback)?;
     let after_data = parsed_container.decoded.get("Tasks").ok_or_else(|| fail("invalid_output", "Tasks section disappeared"))?.clone();
     let parsed = inspect_container(parsed_container, output_hash.clone(), false, callback)?;
-    if !all_lookups_valid(&after_data, &parsed.tasks)? {
+    if !all_lookups_valid(&after_data, &parsed.tasks, callback)? {
         return Err(fail("invalid_output", "Reordered sibling lookup indices are inconsistent"));
     }
     let actual_order: Vec<String> = parsed.tasks.iter().filter(|t| t.parent_guid == parent).map(|t| t.guid.clone()).collect();

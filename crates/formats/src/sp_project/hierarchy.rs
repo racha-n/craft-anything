@@ -207,7 +207,7 @@ fn inner(raw: &[u8], expected: &str, request: &Reparent, callback: &mut dyn FnMu
     if let Some(reason) = relocation::scope(&evidence.tasks) {
         return Err(fail("unsupported_layout", reason.message()));
     }
-    if !relocation::all_lookups_valid(&data, &evidence.tasks)? {
+    if !relocation::all_lookups_valid(&data, &evidence.tasks, callback)? {
         return Err(fail("unsupported_layout", "Source task collection lookup indices are inconsistent"));
     }
     let task = writer::task_for(&evidence.tasks, &request.task_guid)?;
@@ -263,7 +263,7 @@ fn inner(raw: &[u8], expected: &str, request: &Reparent, callback: &mut dyn FnMu
     let parsed_container = container(&output, callback)?;
     let after_data = parsed_container.decoded.get("Tasks").ok_or_else(|| fail("invalid_output", "Tasks section disappeared"))?.clone();
     let parsed = inspect_container(parsed_container, output_hash.clone(), false, callback)?;
-    if parsed.tasks.len() != evidence.tasks.len() || !relocation::all_lookups_valid(&after_data, &parsed.tasks)? {
+    if parsed.tasks.len() != evidence.tasks.len() || !relocation::all_lookups_valid(&after_data, &parsed.tasks, callback)? {
         return Err(fail("invalid_output", "Hierarchy candidate task count or lookup validation failed"));
     }
     let after_groups = groups(&parsed.tasks);

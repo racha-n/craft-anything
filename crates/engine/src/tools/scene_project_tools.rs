@@ -63,6 +63,11 @@ struct Page {
 fn page_size() -> usize {
     100
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InspectMetadata {
+    path: String,
+}
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum DatePolicy {
@@ -188,6 +193,17 @@ pub fn specs() -> Vec<ToolSpec> {
             selection_links,
         ),
         spec(
+            "formats_project_metadata_inspect",
+            "Inspect project metadata coverage",
+            "Read admitted project metadata without geometry. Report task framing separately from collection GUID lookup validity, including mismatch counts; preserve readable task bodies when lookup entries are invalid. This does not verify native row identity.",
+            "Check whether task lookup entries are consistent before relying on a project in its source application.",
+            Toolset::Formats,
+            Effects::EVIDENCE.union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<InspectMetadata>,
+            inspect_metadata,
+        ),
+        spec(
             "formats_project_tasks_list",
             "List project tasks",
             "Page retained source tasks and calendar-derived schedule bounds. Raw wallclock values retain their displayed-clock meaning; no timezone conversion or dependency rescheduling.",
@@ -221,6 +237,34 @@ pub fn specs() -> Vec<ToolSpec> {
             formats_project_frame_evaluate,
         ),
     ]
+}
+fn inspect_metadata(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: InspectMetadata = parse_params(params.clone())?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let imported = craft_anything_formats::sp_project::parse_metadata(&input.bytes, |progress| {
+        ctx.report(Some(progress), "Checking project metadata and task lookup entries");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let imported = imported.map_err(|e| format_err(e, "admitted project metadata"))?;
+    let invalid = imported.coverage.task_collection_lookup.status == craft_anything_formats::sp_project::task_lookup::Status::Invalid;
+    let mut evidence = builder(ctx, "formats_project_metadata_inspect", input.subject, params)
+        .summary(if invalid { "Read project task bodies; collection lookup entries are inconsistent" } else { "Read project metadata; retained task lookup entries are consistent" })
+        .confidence(Confidence::Derived)
+        .coverage(Coverage { status: CoverageStatus::Partial, ..Default::default() })
+        .result(json!({"version":1,"source_sha256":imported.source_sha256,"metadata_schema_version":imported.metadata.get("schema_version"),
+            "admitted_build":imported.metadata.get("admitted_build"),"task_count":imported.metadata.get("tasks").and_then(Value::as_array).map(Vec::len),
+            "resource_count":imported.metadata.get("resources").and_then(Value::as_array).map(Vec::len),
+            "task_record_framing_validated":imported.metadata.pointer("/coverage/task_record_framing_validated"),"coverage":imported.coverage}))
+        .limitation(Limitation::new("task_lookup_scope", "Counts cover lookup entries in nonempty retained task collections. Empty collections contribute no checked entries. Consistency does not verify native row identity or application-wide compatibility."))
+        .limitation(Limitation::new("metadata_geometry_scope", "Metadata only; geometry remains unvalidated and source files/caches are unchanged."))
+        .target_content(true);
+    if invalid {
+        evidence = evidence.limitation(Limitation::new("invalid_task_lookup", "Task record bodies remain readable, but their collection GUID lookup entries are inconsistent. A source application can display duplicate or missing rows; this inspection does not repair the file."));
+    }
+    Ok(ToolOutput::evidence(evidence.build()?))
 }
 fn model(ctx: &mut Ctx<'_>, path: Option<&str>) -> Result<(ProjectSource, Arc<ProjectModel>), ToolError> {
     if let Some(path) = path {
@@ -565,7 +609,13 @@ pub(super) mod tests {
     #[test]
     fn project_tools_require_deep_mode_and_open_source() {
         let engine = Engine::new(Session::new(Settings::default()));
-        for id in ["formats_project_open", "formats_project_tasks_list", "formats_project_costs_list", "formats_project_frame_evaluate"] {
+        for id in [
+            "formats_project_open",
+            "formats_project_metadata_inspect",
+            "formats_project_tasks_list",
+            "formats_project_costs_list",
+            "formats_project_frame_evaluate",
+        ] {
             assert!(engine.call(id, json!({}), CallOptions::new(Caller::Cli)).is_err());
         }
         let engine = Engine::new(Session::new(Settings { deep_mode: true, ..Default::default() }));

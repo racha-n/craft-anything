@@ -12,6 +12,7 @@ mod scene_geometry;
 mod scene_graph;
 mod scene_io;
 pub mod structured;
+pub mod task_lookup;
 pub mod task_strings;
 pub mod writer;
 use crate::{FormatError, scene_bundle};
@@ -518,6 +519,7 @@ struct Evidence {
 #[derive(Serialize)]
 struct Coverage {
     task_record_framing_validated: bool,
+    task_collection_lookup: task_lookup::Report,
     resource_record_framing_validated: bool,
     assignment_resource_refs_checked: bool,
     task_link_refs_checked: bool,
@@ -530,6 +532,7 @@ fn inspect_container(c: Container, source_sha256: String, tasks_only: bool, call
         e.section = Some("Tasks".into());
         e
     })?;
+    let task_collection_lookup = task_lookup::audit(task_data, &tasks, callback)?;
     let mut expense_identities = BTreeSet::new();
     for task in &tasks {
         check(callback, 0.5)?;
@@ -611,12 +614,14 @@ fn inspect_container(c: Container, source_sha256: String, tasks_only: bool, call
         activity_code_opaque_suffix_bytes: definitions.code_tail_bytes,
         coverage: Coverage {
             task_record_framing_validated: true,
+            task_collection_lookup,
             resource_record_framing_validated: !tasks_only,
             assignment_resource_refs_checked: !tasks_only,
             task_link_refs_checked: true,
             profile_code_user_definition_records_checked: true,
         },
         limitations: vec![
+            "Task framing and collection GUID lookup validity are separate checks; consult typed coverage. Valid lookup entries do not establish native row identity",
             "Experimental reader; Tasks, Resources, Use Profiles, Activity Codes and User Fields decoded only; other sections hashed as stored bytes without payload validation",
             "Direct costs admit observed singleton Fixed framing only; values remain storage fields without cost evaluation",
             "Definition records are parsed by bounded framing; referenced user variant/domain must match; unused definition parameters and Activity Codes suffix remain opaque",
@@ -657,6 +662,7 @@ pub struct ImportedMetadata {
 #[derive(Debug, Serialize)]
 pub struct MetadataCoverage {
     pub geometry_validated: bool,
+    pub task_collection_lookup: task_lookup::Report,
 }
 #[derive(Serialize)]
 struct Binding {
@@ -823,11 +829,12 @@ pub fn parse_metadata(raw: &[u8], mut keep_going: impl FnMut(f32) -> bool) -> st
         let source_sha256 = format!("{:x}", source_hash.finalize());
         check(&mut callback, 0.5)?;
         let evidence = inspect_container(container, source_sha256.clone(), false, &mut callback)?;
+        let task_collection_lookup = evidence.coverage.task_collection_lookup.clone();
         let encoded = json(&evidence)?;
         check(&mut callback, 0.9)?;
         let metadata = serde_json::from_slice(&encoded).map_err(|_| fail("invalid_metadata", "Metadata representation"))?;
         check(&mut callback, 1.)?;
-        Ok(ImportedMetadata { source_sha256, metadata, coverage: MetadataCoverage { geometry_validated: false } })
+        Ok(ImportedMetadata { source_sha256, metadata, coverage: MetadataCoverage { geometry_validated: false, task_collection_lookup } })
     })()
     .map_err(format_error)
 }

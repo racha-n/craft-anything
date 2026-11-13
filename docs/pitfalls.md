@@ -1172,6 +1172,9 @@ three-task cycle, producing duplicate native grid rows even though our metadata
 reader still found every task. Validate and rebuild the collection lookup vector;
 test non-involutive permutations and native GUID-based properties after reopening.
 Byte preservation and self-reparse alone do not establish semantic compatibility.
+Read-only inspection must distinguish record framing from lookup validity. Retain
+readable task bodies with explicit mismatch coverage; never infer native row identity
+from successful physical record parsing or a valid lookup vector alone.
 
 
 **A small native window can hide a planning pane.** Resizing the native planning app

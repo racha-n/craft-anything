@@ -191,3 +191,90 @@ fn extended_unicode_names_and_ids_remain_exact_when_their_parent_changes() {
     assert_eq!(parsed.metadata["tasks"][1]["name"], label);
     assert_eq!(parsed.metadata["tasks"][1]["display_id"], "x".repeat(300));
 }
+
+#[test]
+fn read_only_lookup_coverage_accepts_empty_and_noninvolutive_collections_without_native_claims() {
+    for (rows, entries, collections) in [(vec![], 0, 0), (vec![record(3), record(1), record(2)], 3, 1)] {
+        let raw = project(&rows);
+        let parsed = parse_metadata(&raw, |_| true).unwrap();
+        let report = &parsed.coverage.task_collection_lookup;
+        assert_eq!(report.version, 1);
+        assert_eq!(report.status, task_lookup::Status::Valid);
+        assert_eq!(report.entries_checked, entries);
+        assert_eq!(report.collections_checked, collections);
+        assert_eq!(report.mismatched_entries, 0);
+        assert!(!report.native_row_identity_verified);
+        assert_eq!(parsed.metadata["coverage"]["task_record_framing_validated"], true);
+        assert_eq!(parsed.metadata["coverage"]["task_collection_lookup"]["status"], "valid");
+    }
+}
+
+#[test]
+fn read_only_lookup_coverage_reports_root_and_child_mismatches_without_losing_bodies() {
+    let mut data = section(&[record(3), nest(record(1), &[record(2), record(4)])]);
+    let rows = tasks(&data, &mut |_| true).unwrap();
+    for (index, invalid) in [(0, 0u32), (2, u32::MAX)] {
+        let at = rows[index].offset + rows[index].bytes - 4;
+        data[at..at + 4].copy_from_slice(&invalid.to_le_bytes());
+    }
+    let raw = project_with_tasks(empty_section(), data);
+    let parsed = parse_metadata(&raw, |_| true).unwrap();
+    let report = &parsed.coverage.task_collection_lookup;
+    assert_eq!(report.status, task_lookup::Status::Invalid);
+    assert_eq!((report.entries_checked, report.collections_checked), (4, 2));
+    assert_eq!((report.mismatched_entries, report.mismatched_collections), (2, 2));
+    assert!(!report.native_row_identity_verified);
+    assert_eq!(parsed.metadata["coverage"]["task_record_framing_validated"], true);
+    let ids: Vec<_> = parsed.metadata["tasks"].as_array().unwrap().iter().map(|t| t["guid"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(ids, vec![id(3), id(1), id(2), id(4)]);
+    assert!(candidate(&raw, &parsed.source_sha256, &request(4, Some(1), 1, None, 2), |_| true).is_err());
+}
+
+#[test]
+fn read_only_lookup_coverage_counts_duplicate_and_out_of_range_entries_without_indexing_them() {
+    let original = section(&[record(3), record(1), record(2)]);
+    let rows = tasks(&original, &mut |_| true).unwrap();
+    for (indices, mismatches) in [([0u32, 0, 0], 2), ([1, 2, u32::MAX], 1)] {
+        let mut data = original.clone();
+        for (task, value) in rows.iter().zip(indices) {
+            let at = task.offset + task.bytes - 4;
+            data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let raw = project_with_tasks(empty_section(), data);
+        let parsed = parse_metadata(&raw, |_| true).unwrap();
+        assert_eq!(parsed.coverage.task_collection_lookup.status, task_lookup::Status::Invalid);
+        assert_eq!(parsed.coverage.task_collection_lookup.mismatched_entries, mismatches);
+        assert_eq!(parsed.metadata["tasks"].as_array().unwrap().len(), 3);
+        assert!(
+            relocation::candidate(
+                &raw,
+                &parsed.source_sha256,
+                &relocation::Move { task_guid: id(2), expected_parent_guid: None, expected_sibling_index: 2, sibling_index: 0 },
+                |_| true
+            )
+            .is_err()
+        );
+    }
+    assert!(parse_metadata(&project(&[record(1), record(1)]), |_| true).is_err());
+}
+
+#[test]
+fn read_only_lookup_coverage_exceeds_writer_scope_and_remains_cancellable() {
+    let records: Vec<_> = (1..=513u32)
+        .map(|i| {
+            let mut row = record(1);
+            row[12..28].fill(0);
+            row[12..16].copy_from_slice(&i.to_le_bytes());
+            row
+        })
+        .collect();
+    let raw = project(&records);
+    let parsed = parse_metadata(&raw, |_| true).unwrap();
+    assert_eq!(parsed.coverage.task_collection_lookup.status, task_lookup::Status::Valid);
+    assert_eq!(parsed.coverage.task_collection_lookup.entries_checked, 513);
+    assert!(matches!(relocation::outline(&raw, &parsed.source_sha256, |_| true).unwrap().reason, Some(relocation::ScopeReason::TaskLimit)));
+    let data = payload(&raw);
+    let rows = tasks(&data, &mut |_| true).unwrap();
+    assert_eq!(task_lookup::audit(&data, &rows, &mut |_| false).unwrap_err().code, "cancelled");
+    assert_eq!(task_lookup::audit(&section(&[]), &[], &mut |_| false).unwrap_err().code, "cancelled");
+}
