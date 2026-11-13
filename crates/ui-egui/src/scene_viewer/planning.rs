@@ -268,6 +268,10 @@ fn group<R>(ui: &mut Ui, label: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
 
 impl SceneApp {
     pub(super) fn choose_file(&mut self) {
+        if self.draft_active() {
+            self.status = "Close the project draft before opening another source.".into();
+            return;
+        }
         if !self.jobs.busy() {
             self.jobs.spawn("Choose project", true, |_| {
                 Ok(super::Done::Chosen(
@@ -324,14 +328,18 @@ impl SceneApp {
                 ui.horizontal(|ui| {
                     let loaded = self.model.is_some();
                     group(ui, "Project", |ui| {
-                        if command(ui, "folder-open", "Browse", !self.jobs.busy()) {
+                        if command(ui, "folder-open", "Browse", !self.jobs.busy() && !self.draft_active()) {
                             self.choose_file();
                         }
-                        if command(ui, "file", "Open", !self.jobs.busy() && !self.path.is_empty()) {
+                        if command(ui, "file", "Open", !self.jobs.busy() && !self.draft_active() && !self.path.is_empty()) {
                             self.open();
                         }
                     });
                     group(ui, "Workspace", |ui| {
+                        let native = self.model.as_ref().is_some_and(|m| m.manifest.extension().is_some_and(|s| s.eq_ignore_ascii_case("sp")));
+                        if command(ui, "clipboard-list", "Project draft", native && !self.jobs.busy()) {
+                            self.open_draft();
+                        }
                         if command(ui, "clipboard-list", "Task schedule", loaded) {
                             self.state.planning.show_schedule = !self.state.planning.show_schedule;
                         }

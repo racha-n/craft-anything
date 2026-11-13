@@ -2497,7 +2497,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
 - [ ] Add cost/progress editing and cost charts before enabling the grey Project Controls editing/analysis commands.
 - [x] Enforce source-unit admission in Material evaluation and add bounded, cancellable cost-curve sampling shared by UI/CLI/MCP. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add source-revision-bound scalar edit sessions with undo/redo, explicit candidate publication and cache isolation while native-save acceptance is pending. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-- [ ] Connect source-bound scalar draft preview, guarded field forms, undo/redo and candidate export to the planning UI while keeping the original viewport isolated. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+- [x] Connect source-bound scalar draft preview, guarded field forms, undo/redo and candidate export to the planning UI while keeping the original viewport isolated. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Export source-hash/focus-bound task, resource, budget and actual-expense CSV reports through engine tools. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [x] Add optional compressed MP4 encoding with bounded cancellation and reproducible frame checks. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Stream compressed video frames without a staged AVI before increasing clip length or render budgets.

@@ -37,6 +37,12 @@ enum Request {
         #[serde(default)]
         offset: usize,
     },
+    Refresh {
+        draft_id: u64,
+        expected_source_sha256: String,
+        #[serde(default)]
+        offset: usize,
+    },
     Apply {
         draft_id: u64,
         expected_source_sha256: String,
@@ -108,10 +114,14 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
                 | Request::Undo { draft_id, expected_source_sha256, revision }
                 | Request::Redo { draft_id, expected_source_sha256, revision }
                 | Request::Close { draft_id, expected_source_sha256, revision, .. }
-                | Request::WriteCandidate { draft_id, expected_source_sha256, revision, .. } => (draft_id, expected_source_sha256, revision),
+                | Request::WriteCandidate { draft_id, expected_source_sha256, revision, .. } => (draft_id, expected_source_sha256, Some(*revision)),
+                Request::Refresh { draft_id, expected_source_sha256, .. } => (draft_id, expected_source_sha256, None),
                 Request::Open { .. } => return Err(ToolError::invalid("Open request mismatch.")),
             };
-            if existing.id != *id || !existing.draft.source_sha256.eq_ignore_ascii_case(expected) || existing.draft.revision != *revision {
+            if existing.id != *id
+                || !existing.draft.source_sha256.eq_ignore_ascii_case(expected)
+                || revision.is_some_and(|revision| existing.draft.revision != revision)
+            {
                 return Err(ToolError::invalid("Draft source or revision changed; refresh before continuing."));
             }
             (*existing).clone()
@@ -131,7 +141,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         Request::Apply { revision, edits, .. } => session.draft.apply(revision, &edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?,
         Request::Undo { revision, .. } => session.draft.undo(revision).map_err(ToolError::invalid)?,
         Request::Redo { revision, .. } => session.draft.redo(revision).map_err(ToolError::invalid)?,
-        Request::Inspect { offset: value, .. } => offset = value,
+        Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
             return project_candidate_tools::run(
                 ctx,
@@ -229,6 +239,14 @@ mod tests {
         assert_eq!(changed["tasks"][0]["duration_storage_scalar"], 42);
         assert_ne!(changed["draft_sha256"], opened["draft_sha256"]);
         assert!(call(apply).is_err());
+        assert!(call(request("inspect", 0)).is_err());
+        let refresh = json!({"action":"refresh","draft_id":id,"expected_source_sha256":hash});
+        let refreshed = call(refresh.clone()).unwrap();
+        assert_eq!(refreshed["revision"], 1);
+        assert_eq!(refreshed["draft_sha256"], changed["draft_sha256"]);
+        let mut wrong_source = refresh.clone();
+        wrong_source["expected_source_sha256"] = json!("0".repeat(64));
+        assert!(call(wrong_source).is_err());
         assert!(call(json!({"action":"open","path":path,"expected_source_sha256":hash})).is_err());
         assert!(call(request("close", 1)).is_err());
         let undone = call(request("undo", 1)).unwrap();
@@ -258,6 +276,7 @@ mod tests {
         call(close).unwrap();
         let reopened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
         assert_ne!(reopened["draft_id"], id);
+        assert!(call(refresh).is_err());
         assert!(call(request("inspect", 0)).is_err());
     }
 }

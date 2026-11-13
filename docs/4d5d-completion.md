@@ -57,8 +57,10 @@ Native Save and authoring controls remain disabled pending independent acceptanc
 
 ## Isolated scalar drafts
 
-`formats_project_edit` opens a source-hash-bound snapshot. Every subsequent request must match
-the returned `draft_id`, source hash and revision. Applying a transaction validates all fields
+`formats_project_edit` opens a source-hash-bound snapshot. Mutations and revision-bound
+inspection must match the returned `draft_id`, source hash and revision. Read-only `refresh`
+requires the draft identity and source hash but returns the current revision, so a client
+can recover after another client changes the same draft without weakening mutation guards. Applying a transaction validates all fields
 before replacing history, then rebuilds parsed metadata and derived task/cost caches. The loaded
 viewport and explicit-path metadata caches are separate and remain tied to their original source.
 The draft is an isolated experimental preview, not an edited viewport or an admitted native Save.
@@ -148,3 +150,37 @@ The latest source passed 2,724 tests across 248 unit, integration and doctest ha
 for formats, analysis and engine, with 19 ignored and no failures. All-target clippy,
 layers, locks, secrets, tool documentation, wasm and formatting also passed on the same frozen source. The lean validation cache disables
 incremental compilation and debug symbols; no source/compiler optimization policy changed.
+
+## Planning draft interface
+
+The scene viewer exposes a separate experimental project-draft window for SP sources.
+It uses the shared draft tool through background jobs, retains typed source/draft/revision
+identities, and leaves the original viewport and source-keyed caches unchanged. The window
+shows derived preview dates and bounded task pages. Advanced scalar forms expose stored
+start/duration values, assignment quantity/utilization pairs and admitted direct Fixed costs.
+Changed fields on a form page are submitted together; source units are retained and no
+universal utilization conversion or automatic scheduling policy is implied.
+
+Undo, redo and refresh reload the authoritative snapshot. Older or differently bound
+responses cannot replace a dirty preview. Within the scene viewer, another source cannot
+replace an active draft; hiding the window preserves it. Closing a dirty draft requires
+explicit discard. Candidate export requires native-validation acknowledgement, a separate
+new output path and the existing no-clobber/source-hash checks. It does not clear dirty
+state or enable the general Save command. Worker jobs receive the repaint context before
+the initial draft-open operation starts.
+
+Additional independent native controls located Driving at assignment byte 203 and Fixed
+Units at byte 205: the isolated toggles changed 0 to 1 and 1 to 0 respectively, with no
+other decoded Tasks changes. With Fixed Units false, changing duration from 3 to 4 days
+kept raw utilization 166.66666666666666 but changed stored quantity 5 to 6.666666666666666
+(native display 6.67). The earlier Fixed Units true duration control instead retained
+quantity 5 and changed utilization to 125. These are scoped observations, not a general
+editing policy; the current forms deliberately expose independent scalar transactions.
+
+The frozen UI source passed the main application, CLI and check-tool builds; 925 unit/
+integration/target tests (15 ignored), all-target clippy, layers, locks, secrets, tool
+documentation, doctests and formatting. The widget regression exercises actual UI actions
+through the shared engine, recovery after a second client changes revision, candidate
+publication and unchanged source bytes. Offscreen Studio/Planning images were inspected;
+title contrast and scroll clipping were corrected. This validates the experimental scalar
+interface, not general authoring, desktop interaction parity or native Save admission.

@@ -1136,3 +1136,11 @@ to a fixed 1,000-pixel height collapsed its Gantt area without closing the proje
 changing task data. Check the observed layout and available monitor work area before
 treating a missing pane as an import failure. Fit the owned window within that work
 area, verify the expected pane is present, and retain the failed attempt separately.
+
+
+**Floating-window QA needs both themes and the full footer.** In egui 0.36, use
+`Context::global_style()` for a context-level window frame. Restyling only the content
+does not restyle the title bar; keep its text contrast aligned with the context. A
+content-height increase can clip acknowledgement/export/close controls without failing
+accessibility-action tests. Inspect offscreen images in both layouts and provide vertical
+scrolling. Attach the repaint context before spawning the initial asynchronous operation.

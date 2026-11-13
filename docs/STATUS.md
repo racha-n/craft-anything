@@ -22,6 +22,16 @@ layers, locks, secrets, tools, wasm and formatting.
 Broader scheduling and assignment settings remain unadmitted; this is not release-ready
 authoring.
 
+### Isolated scalar draft interface (R3.14)
+
+SP scene views expose an experimental Project draft window with source-bound forms,
+undo/redo, read-only revision refresh and separate candidate export. The source viewport
+stays unchanged. The widget sequence was tested through the real engine against a
+temporary synthetic SP; Studio/Planning offscreen images were inspected. Main/CLI builds,
+925 UI/engine target tests (15 ignored), clippy and required static checks passed.
+Advanced fields retain source storage units; automatic scheduling, utilization policy
+and general native Save remain unadmitted. See [the supported contract](4d5d-completion.md).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

@@ -1,5 +1,6 @@
 //! Experimental scene-bundle client. Parsing and picking dispatch through the shared engine.
 pub mod camera;
+mod draft_panel;
 pub mod draw_plan;
 mod gpu;
 mod metadata_panel;
@@ -109,6 +110,7 @@ pub struct SceneApp {
     pub last_presentation_output: Option<serde_json::Value>,
     viewpoints_scene: Option<String>,
     viewpoints: Vec<craft_anything_engine::tools::scene_view_tools::Viewpoint>,
+    draft: Option<draft_panel::DraftPanel>,
 }
 impl SceneApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: String) -> Self {
@@ -154,9 +156,14 @@ impl SceneApp {
             last_presentation_output: None,
             viewpoints_scene: None,
             viewpoints: Vec::new(),
+            draft: None,
         }
     }
     pub fn request_open(&mut self, path: String) {
+        if self.draft_active() {
+            self.status = "Close the project draft before opening another source.".into();
+            return;
+        }
         if let Some(panel) = &mut self.metadata {
             panel.request_open(path.clone());
         }
@@ -200,6 +207,11 @@ impl SceneApp {
         if self.jobs.busy() {
             return;
         }
+        if self.draft_active() {
+            self.status = "Close the project draft before opening another source.".into();
+            return;
+        }
+        self.draft = None;
         let Some(graphics) = self.graphics.clone() else {
             self.status = "A graphics adapter is required for the viewport. The inspection tools work headlessly.".into();
             return;
@@ -696,6 +708,7 @@ impl SceneApp {
         ui.small("4D/5D interpretation limits remain explicit in the project panels.");
     }
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.draft_window(ui.ctx());
         if self.metadata.is_none() {
             self.tick_presentation(ui);
             self.presentation_windows(ui);
@@ -749,6 +762,11 @@ impl SceneApp {
                     self.state.camera.fit(model.scene.bounds);
                     self.changed();
                 }
+                if self.model.as_ref().is_some_and(|m| m.manifest.extension().is_some_and(|s| s.eq_ignore_ascii_case("sp")))
+                    && ui.add_enabled(!self.jobs.busy(), egui::Button::new("Project draft")).clicked()
+                {
+                    self.open_draft();
+                }
                 if ui.checkbox(&mut self.state.camera.y_up, "Y up (manual)").changed() {
                     self.changed();
                 }
@@ -759,14 +777,14 @@ impl SceneApp {
                         .desired_width((ui.available_width() - 165.).max(80.))
                         .hint_text("Absolute path to .sp or scene.json"),
                 );
-                if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Browse")).clicked() {
+                if ui.add_enabled(!self.jobs.busy() && !self.draft_active(), egui::Button::new("Browse")).clicked() {
                     self.jobs.spawn("Choose project", true, |_| {
                         Ok(Done::Chosen(
                             rfd::FileDialog::new().add_filter("Project or scene", &["sp", "json"]).pick_file().map(|p| p.to_string_lossy().into_owned()),
                         ))
                     });
                 }
-                if ui.add_enabled(!self.jobs.busy(), egui::Button::new("Open")).clicked() {
+                if ui.add_enabled(!self.jobs.busy() && !self.draft_active(), egui::Button::new("Open")).clicked() {
                     self.open();
                 }
             });
@@ -814,7 +832,7 @@ impl SceneApp {
                 .frame(egui::Frame::new().fill(tokens.chrome).inner_margin(egui::Margin::symmetric(7, 3)))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Read only");
+                        ui.label(if self.draft_active() { "Source view (read only)" } else { "Read only" });
                         ui.separator();
                         ui.add(egui::Label::new(&self.status).truncate());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -961,6 +979,9 @@ impl eframe::App for SceneApp {
         self.show(ui);
     }
     fn on_exit(&mut self) {
+        if let Some(draft) = &self.draft {
+            draft.cancel();
+        }
         for j in self.jobs.running() {
             j.cancel.cancel();
         }
