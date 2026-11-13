@@ -2494,7 +2494,9 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
       Establish independent native task/relationship/lag controls before structural SP transactions and scheduling admission.
       Guarded variable-length task name/Display ID candidates matched independent native controls and passed five native round trips, including one geometry-bearing assigned task. Creation/deletion, hierarchy, dependencies and scheduling remain pending.
       - [x] Integrate guarded task labels into shared scalar/text draft history and planning forms. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-      - [ ] Validate an explicit Gregorian scheduler anchor and calendar/link policies against native controls before enabling rescheduling. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+      - [x] Validate an explicit Gregorian scheduler anchor with FS/lag 0 and FS/lag 2d on the observed Project Calendar; retain the localized default-year anomaly separately. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+      - [ ] Validate remaining link kinds, negative-lag scheduling, calendar overrides, constraints and task kinds before general rescheduling admission.
+      - [ ] Add a bounded, explicitly declared FS earliest-date preview through the shared analysis/engine tools, without mutating source projects or claiming native scheduler parity.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`

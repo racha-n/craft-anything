@@ -39,7 +39,9 @@ native Save/reopen with equal General/assignment values and both mesh instances 
 
 Automatic scheduling, utilization policy, structural authoring and general native Save
 remain unadmitted. A separate native Reschedule control exposed a localized Data Date
-versus raw-year mismatch; its explicit-date control is still pending. See
+versus raw-year mismatch. Separate explicit-Gregorian controls subsequently preserved
+2026 dates for FS/lag 0 and FS/lag 2d through native Reschedule/save/reopen; other
+scheduling policies remain unadmitted. See
 [the contracts and acceptance scope](4d5d-completion.md).
 
 ### Guarded task text candidates (R3.14)

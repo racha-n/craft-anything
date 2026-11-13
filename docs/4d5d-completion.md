@@ -282,6 +282,15 @@ These controls did not invoke Reschedule and do not prove a scheduling algorithm
 The observed native Reschedule options use Manual Data Date, ASAP, minute snapping,
 upstream-task calendars for links and retained logic for progressed tasks. A default
 Thai-era date display of 8/11/2569 produced raw task dates in Gregorian year 2569 after
-Reschedule/save/reopen. Its cause is unresolved; an explicit-date control remains pending.
+Reschedule/save/reopen. Its cause is unresolved; separate explicit-date controls are recorded below.
 Do not infer the scheduler anchor from localized display text or silently subtract 543
 years. General rescheduling, critical paths, calendar editing and baselines remain open.
+
+Separate controls explicitly entered Gregorian 8/11/2026 9:00 as the Manual Data Date.
+With the recorded ASAP/upstream-calendar/minute-snap options, both one-day Planned tasks
+survived native Reschedule/save/reopen: FS/lag 0 placed the predecessor at November 9
+09:00 and successor at November 10 09:00; FS/lag 2d placed the successor at November 12
+09:00. The zero-lag native Tasks payload exactly matched a source-bound candidate that
+changed only the successor's stored planned start. This validates the explicit-anchor
+fixture subset, not the cause of the localized default mismatch or other scheduling
+policies, task kinds, constraints, hierarchies or critical paths.
