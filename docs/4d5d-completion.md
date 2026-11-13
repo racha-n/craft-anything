@@ -536,7 +536,7 @@ sources. Validation covers the reader's 10,000-task limit independently of the
 The report schema is [version 1](schemas/sp-task-lookup-validation-v1.schema.json).
 Native row identity stays unverified even for consistent entries. A missing report
 in an older prepared bundle conveys no lookup validation. Existing scene/task/frame
-views need separate coverage propagation before broader row-identity admission.
+views use the source-bound extension below; broader native row identity remains unverified.
 Focused checks passed 63 format regressions, six draft/inspection cases, six metadata
 tool cases and strict all-target clippy. The new CLI classified nine retained native
 controls and both known negative inputs correctly, with unchanged source hashes and
@@ -549,3 +549,33 @@ main/CLI builds, 2,516 formats/engine target tests (19 ignored), strict clippy,
 layers, locks, secrets, tools, wasm, doctests and formatting. Retained native source
 hashes matched all corpus inputs; both negative task pages still matched their
 baseline. All 57 protected sources remained unchanged.
+
+## Source-bound lookup coverage in existing views
+
+Scene opening, task/cost pages and evaluated frames carry source-bound task lookup
+coverage separately from native row identity. Raw project loads retain the typed
+report produced from their own bytes. Prepared scene bundles keep coverage unknown,
+even when their metadata embeds a report; retained metadata cannot substitute for
+checking the raw source. Task/frame source identities expose a report or null, and
+keep `native_row_identity_verified` false. Lookup warnings remain outside paged rows.
+
+Immutable loaded scenes and latest scene/metadata frame snapshots carry their own
+coverage. Metadata evaluation cannot borrow a retained viewport's report. The viewer,
+metadata client and draft form show consistent/inconsistent/unknown status; invalid
+entries warn that the native application can display duplicate or missing rows.
+Draft snapshots accept missing older coverage as unknown and reject malformed counts,
+future report versions or transported native-verification claims without replacing
+unapplied forms. Report-shape checks do not validate lookup bytes themselves.
+
+Focused checks passed 64 format cases, six draft/inspection cases, seven metadata/frame
+cases and twelve widget cases. Both metadata warning layouts were inspected. All
+11 frozen checks passed, including main/CLI builds, 2,763 target tests (25 ignored),
+strict clippy, layers, locks, secrets, tools, wasm, doctests and formatting. Thirteen
+raw task/frame inputs passed source coverage and empty-page warning checks. Geometry
+copies retained two instances/one definition, and prepared-bundle coverage stayed unknown.
+The canonical GPU verifier rendered all three sources in both layouts; six scene and
+two metadata images were inspected. Five receipts passed their schemas and complete
+chains. All 57 protected sources stayed unchanged.
+The developer `scene_snapshot --lookup-only` mode captures both layouts without the
+broader camera/video workflow. Invalid geometry controls are tested only in our
+safe Rust parser/viewer; no new native application run is performed for this change.

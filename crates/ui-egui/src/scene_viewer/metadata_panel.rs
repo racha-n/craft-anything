@@ -295,6 +295,9 @@ impl MetadataPanel {
         if let Some(sha) = &self.source_sha256 {
             ui.small(format!("Source SHA-256: {sha}"));
         }
+        if let Some(latest) = &self.latest {
+            project_panel::lookup_coverage(ui, latest.task_collection_lookup.as_ref());
+        }
         let source = self.draft_source();
         if ui
             .add_enabled(source.is_some(), egui::Button::new("Project draft"))

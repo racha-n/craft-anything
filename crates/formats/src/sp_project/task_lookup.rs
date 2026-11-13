@@ -1,7 +1,8 @@
 //! Read-only validation of the observed task collection GUID lookup vectors.
 use super::*;
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Valid,
@@ -9,7 +10,8 @@ pub enum Status {
 }
 
 /// Versioned coverage of lookup entries, independent of record framing or native row identity.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Report {
     pub version: u32,
     pub status: Status,
@@ -18,6 +20,23 @@ pub struct Report {
     pub mismatched_collections: usize,
     pub mismatched_entries: usize,
     pub native_row_identity_verified: bool,
+}
+impl Report {
+    /// Check a transported report's shape, not the source lookup entries themselves.
+    pub fn shape_valid(&self) -> bool {
+        self.version == 1
+            && !self.native_row_identity_verified
+            && self.entries_checked <= RECORD_LIMIT
+            && self.collections_checked <= self.entries_checked
+            && (self.entries_checked == 0) == (self.collections_checked == 0)
+            && self.mismatched_entries <= self.entries_checked
+            && self.mismatched_collections <= self.collections_checked
+            && self.mismatched_collections <= self.mismatched_entries
+            && match self.status {
+                Status::Valid => self.mismatched_entries == 0 && self.mismatched_collections == 0,
+                Status::Invalid => self.mismatched_entries > 0 && self.mismatched_collections > 0,
+            }
+    }
 }
 
 pub(super) fn lookup_indices(data: &[u8], siblings: &[&Task]) -> Result<Vec<u32>> {

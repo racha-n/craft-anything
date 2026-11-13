@@ -84,6 +84,8 @@ struct Snapshot {
     can_redo: bool,
     edit_count: usize,
     #[serde(default)]
+    task_collection_lookup: Option<craft_anything_formats::sp_project::task_lookup::Report>,
+    #[serde(default)]
     order_edit_count: usize,
     #[serde(default = "order_limit")]
     order_edit_limit: usize,
@@ -243,6 +245,9 @@ impl State {
         }
         if value.tasks.len() > 100 || value.derived_tasks.items.len() > 100 {
             return Err("Draft response exceeded its page size.".into());
+        }
+        if value.task_collection_lookup.as_ref().is_some_and(|r| !r.shape_valid() || r.entries_checked != value.task_total) {
+            return Err("Draft lookup coverage is inconsistent.".into());
         }
         if value.order_edit_limit > ORDER_LIMIT
             || value.order_edit_count > value.order_edit_limit
@@ -409,6 +414,7 @@ impl DraftPanel {
                     if ui.button("Open draft").clicked() { action = Some(("open", json!({}))); }
                     return;
                 };
+                project_panel::lookup_coverage(ui, snapshot.task_collection_lookup.as_ref());
                 ui.horizontal(|ui| {
                     ui.label(format!("Revision {} · {} changes", snapshot.revision, snapshot.edit_count));
                     if ui.add_enabled(snapshot.can_undo, egui::Button::new("Undo")).clicked() { action = Some(("undo", json!({}))); }

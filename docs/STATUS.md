@@ -210,9 +210,31 @@ with no new native UI run for this inspection change. All ten frozen checks pass
 including main/CLI builds, 2,516 formats/engine target tests (19 ignored), clippy,
 layers, locks, secrets, tools, wasm, doctests and formatting. Source provenance matched
 the retained native hashes; both negative inputs retained their baseline task pages,
-and all 57 protected sources stayed unchanged. Coverage propagation into existing
-scene/task/frame views remains separately pending, with missing older-bundle coverage
-kept unknown. See [the contract](4d5d-completion.md#read-only-task-lookup-coverage).
+and all 57 protected sources stayed unchanged. The source-bound view extension below
+keeps missing older-bundle coverage unknown. See
+[the contract](4d5d-completion.md#read-only-task-lookup-coverage).
+
+### Source-bound lookup status in project views (R3.14)
+
+Raw project loads now retain their typed lookup report in loaded-scene and latest
+frame snapshots. Task/cost pages and frame results expose it with the source hash;
+invalid/unchecked coverage has explicit evidence limitations outside paged rows.
+Prepared bundles remain unknown even with an embedded report. Viewer, metadata and
+draft panels show status while keeping native row identity unverified. Draft report
+shape/count/version checks preserve unapplied forms on rejection, and older responses
+without coverage remain unknown.
+
+Focused checks passed 64 format cases, six draft/inspection cases, seven metadata/frame
+cases and twelve widgets. Metadata warning images were inspected in both layouts.
+The fresh CLI passed task/frame coverage on 13 raw inputs, including warnings on empty
+pages. Valid and invalid geometry copies each opened with two mesh instances and one
+definition; all other 47 stored sections stayed identical. A prepared bundle with an
+embedded report stayed unknown. All 11 frozen checks passed, including main/CLI builds,
+2,763 target tests (25 ignored), strict clippy, layers, locks, secrets, tools, wasm,
+doctests and formatting. The canonical GPU verifier rendered valid/invalid/bundle
+sources in both layouts; all six scene images and two metadata images were inspected.
+Five legacy/structural receipts passed schemas and complete chains, and all 57 protected
+sources stayed unchanged. No new native source-application run was performed.
 
 ### Readable CSV dates and reusable templates (R3.14)
 

@@ -269,6 +269,7 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
         "order_edit_count":session.draft.structural_edits().len(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
         "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
+        "task_collection_lookup":imported.coverage.task_collection_lookup,
         "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
         "tasks":page,"derived_tasks":model.page_tasks(offset,100),
         "native_reopen_verified":false,"derived_schedule_consistency_verified":false});
@@ -375,6 +376,17 @@ mod tests {
         assert_eq!(lookup["mismatched_entries"], 1);
         assert_eq!(lookup["native_row_identity_verified"], false);
         assert!(inspected["limitations"].as_array().unwrap().iter().any(|v| v["code"] == "invalid_task_lookup"));
+        for (id, params) in
+            [("formats_project_tasks_list", json!({"path":bad_path})), ("formats_project_frame_evaluate", json!({"path":bad_path,"focus_wallclock":0}))]
+        {
+            let output = call(id, params).unwrap();
+            assert_eq!(output["result"]["source"]["task_collection_lookup"]["status"], "invalid");
+            assert_eq!(output["result"]["source"]["native_row_identity_verified"], false);
+            assert!(output["limitations"].as_array().unwrap().iter().any(|v| v["code"] == "invalid_task_lookup"));
+        }
+        let latest = engine.session().ext.get::<super::super::scene_project_tools::LatestMetadataFrame>().unwrap();
+        assert_eq!(latest.source_sha256, format!("{:x}", Sha256::digest(&bad)));
+        assert_eq!(latest.task_collection_lookup.as_ref().unwrap().status, sp_project::task_lookup::Status::Invalid);
         let valid = call("formats_project_metadata_inspect", json!({"path":source})).unwrap();
         assert_eq!(valid["result"]["coverage"]["task_collection_lookup"]["status"], "valid");
         let draft = call(
@@ -384,6 +396,7 @@ mod tests {
         .unwrap();
         assert_eq!(draft["result"]["draft_sha256"], imported.source_sha256);
         assert_eq!(draft["result"]["dirty"], false);
+        assert_eq!(draft["result"]["task_collection_lookup"]["status"], "valid");
         assert_eq!(call("formats_project_tasks_list", json!({"path":source})).unwrap()["result"], before);
         assert_eq!(std::fs::read(source).unwrap(), raw);
         assert_eq!(std::fs::read(bad_path).unwrap(), bad);

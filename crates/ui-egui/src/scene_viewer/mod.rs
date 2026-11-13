@@ -804,6 +804,9 @@ impl SceneApp {
                 self.changed();
             }
         }
+        if let Some(model) = &self.model {
+            project_panel::lookup_coverage(ui, model.task_collection_lookup.as_ref());
+        }
         if self.evaluation_failed && ui.button("Retry timeline evaluation").clicked() {
             self.frame_key = None;
             self.evaluation_failed = false;

@@ -648,6 +648,7 @@ fn inspect_container(c: Container, source_sha256: String, tasks_only: bool, call
 pub struct ImportedProject {
     pub scene: scene_bundle::Scene,
     pub metadata: serde_json::Value,
+    pub task_collection_lookup: task_lookup::Report,
 }
 
 /// Strict project metadata without inspecting or admitting a drawable scene.
@@ -940,7 +941,7 @@ fn parse_inner(raw: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<Impo
     if let Some(assets) = textures {
         scene_geometry::attach_textures(&mut scene, &geometry, assets);
     }
-    Ok(ImportedProject { scene, metadata })
+    Ok(ImportedProject { scene, metadata, task_collection_lookup: evidence.coverage.task_collection_lookup })
 }
 
 fn hex(raw: &[u8]) -> String {

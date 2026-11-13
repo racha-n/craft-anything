@@ -1,4 +1,4 @@
-//! Local GPU and interaction verification: scene_snapshot <scene.json> <output-directory>.
+//! Local GPU and interaction verification: scene_snapshot <source> <output-directory> [--lookup-only].
 #![forbid(unsafe_code)]
 use craft_anything_ui_egui::scene_viewer::SceneApp;
 use egui_kittest::{
@@ -31,7 +31,7 @@ fn settle(h: &mut Harness<SceneApp>) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
-fn snapshot(path: String, output: &Path) -> Result<(), String> {
+fn snapshot(path: String, output: &Path, lookup_only: bool) -> Result<(), String> {
     std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
     let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
     setup.power_preference = eframe::wgpu::PowerPreference::HighPerformance;
@@ -55,6 +55,36 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
         SceneApp::with_engine(std::sync::Arc::new(craft_anything_engine::Engine::new(session)), cc.wgpu_render_state.clone(), path)
     });
     settle(&mut h)?;
+    if lookup_only {
+        use craft_anything_formats::sp_project::task_lookup::Status;
+        let model = h.state().model.clone().ok_or("No scene loaded")?;
+        let lookup = model.task_collection_lookup.as_ref().filter(|r| r.shape_valid());
+        let label = match lookup {
+            None => "Task lookup: unknown · Native rows unverified".to_owned(),
+            Some(r) if r.status == Status::Valid => "Task lookup: consistent · Native rows unverified".to_owned(),
+            Some(r) => {
+                format!("Task lookup: inconsistent · Entries: {} · Collections: {} · Native rows unverified", r.mismatched_entries, r.mismatched_collections)
+            }
+        };
+        for (name, planning) in [("lookup-studio.png", false), ("lookup-planning.png", true)] {
+            h.state_mut().state.planning.enabled = planning;
+            h.run_steps(2);
+            settle(&mut h)?;
+            let _ = h.get_by_label(&label);
+            let image = output.join(name);
+            if image.exists() {
+                return Err("Use a new output directory for lookup snapshots".into());
+            }
+            h.render()?.save(image).map_err(|e| e.to_string())?;
+        }
+        let report = output.join("lookup-verification.json");
+        if report.exists() {
+            return Err("Use a new output directory for lookup snapshots".into());
+        }
+        std::fs::write(report,serde_json::to_vec_pretty(&serde_json::json!({"version":1,"source_sha256":model.scene.source_sha256,"task_collection_lookup":lookup,"native_row_identity_verified":false,"mesh_instances":model.scene.instances.len(),"definitions":model.scene.meshes.len(),"both_layouts_label_verified":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        println!("Verified source-bound lookup status in both layouts");
+        return Ok(());
+    }
     h.render()?.save(output.join("scene-fit.png")).map_err(|e| e.to_string())?;
     // Verify the actual sidecar controls and camera restoration with isolated settings.
     let saved = serde_json::to_value(&h.state().state.camera).map_err(|e| e.to_string())?;
@@ -438,10 +468,10 @@ fn snapshot(path: String, output: &Path) -> Result<(), String> {
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     let Some((path, output)) = args.get(1).zip(args.get(2)) else {
-        eprintln!("Usage: scene_snapshot <scene.json> <output-directory>");
+        eprintln!("Usage: scene_snapshot <source> <output-directory> [--lookup-only]");
         std::process::exit(2);
     };
-    if let Err(e) = snapshot(path.clone(), Path::new(output)) {
+    if let Err(e) = snapshot(path.clone(), Path::new(output), args.get(3).is_some_and(|v| v == "--lookup-only")) {
         eprintln!("{e}");
         std::process::exit(1);
     }

@@ -17,6 +17,8 @@ pub struct LoadedScene {
     pub manifest: PathBuf,
     pub subject: Subject,
     pub metadata: Arc<Value>,
+    /// Present only when the raw project bytes were checked in this load, never inferred from a bundle.
+    pub task_collection_lookup: Option<craft_anything_formats::sp_project::task_lookup::Report>,
 }
 pub fn specs() -> Vec<ToolSpec> {
     vec![
@@ -135,17 +137,19 @@ pub(crate) fn formats_project_open(ctx: &mut Ctx<'_>, params: Value) -> Result<T
     }
     let imported = imported.map_err(|e| format_err(e, "an admitted project model"))?;
     let data = Arc::new(imported.scene);
-    let result = json!({"scene_id":data.id,"source_sha256":data.source_sha256,"mesh_instances":data.instances.len(),"definitions":data.meshes.len(),"vertices":data.positions.len(),"resources":data.resources.len(),"tasks":imported.metadata.get("tasks").and_then(Value::as_array).map(Vec::len),"object_colours":data.object_colors.len(),"object_colour_policy":scene_bundle::OBJECT_COLOR_POLICY,"native_units_verified":false,"native_axes_verified":false});
+    let result = json!({"scene_id":data.id,"source_sha256":data.source_sha256,"mesh_instances":data.instances.len(),"definitions":data.meshes.len(),"vertices":data.positions.len(),"resources":data.resources.len(),"tasks":imported.metadata.get("tasks").and_then(Value::as_array).map(Vec::len),"object_colours":data.object_colors.len(),"object_colour_policy":scene_bundle::OBJECT_COLOR_POLICY,"native_units_verified":false,"native_axes_verified":false,"task_collection_lookup":imported.task_collection_lookup,"native_row_identity_verified":false});
     let count = data.instances.len();
     ctx.session.ext.insert(Arc::new(LoadedScene {
         scene: data,
         manifest: input.path.clone(),
         subject: input.subject.clone(),
         metadata: Arc::new(imported.metadata),
+        task_collection_lookup: Some(imported.task_collection_lookup.clone()),
     }));
     let ev=builder(ctx,"formats_project_open",input.subject,params).summary(format!("Opened a source project with {count} mesh instances"))
         .confidence(Confidence::Derived).coverage(Coverage::complete(count as u64)).result(result).target_content(true)
-        .limitation(Limitation::new("admitted_layout_only","Only the observed serialization layout is supported; engineering units, axes, source materials and application-wide simulation parity require separate evidence." )).build()?;
+        .limitation(Limitation::new("admitted_layout_only","Only the observed serialization layout is supported; engineering units, axes, source materials and application-wide simulation parity require separate evidence." ));
+    let ev = super::scene_project_tools::lookup_evidence(ev, Some(&imported.task_collection_lookup)).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 fn formats_scene_bundle_open(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
@@ -191,13 +195,14 @@ fn formats_scene_bundle_open(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOut
         return Err(ToolError::cancelled());
     }
     let data = Arc::new(parsed.map_err(|e| format_err(e, "a version-1 scene bundle"))?);
-    let result = json!({"scene_id":data.id,"source_sha256_declared":data.source_sha256,"nodes":data.node_count,"meshes":data.meshes.len(),"mesh_instances":data.instances.len(),"vertices":data.positions.len(),"triangles_in_definitions":data.triangles,"resources":data.resources.len(),"bounds":data.bounds,"coordinate_unit_declared":data.unit_declaration,"axes_declared":data.axis_declaration,"units_verified":false,"axes_verified":false,"materials_verified":false});
+    let result = json!({"scene_id":data.id,"source_sha256_declared":data.source_sha256,"nodes":data.node_count,"meshes":data.meshes.len(),"mesh_instances":data.instances.len(),"vertices":data.positions.len(),"triangles_in_definitions":data.triangles,"resources":data.resources.len(),"bounds":data.bounds,"coordinate_unit_declared":data.unit_declaration,"axes_declared":data.axis_declaration,"units_verified":false,"axes_verified":false,"materials_verified":false,"task_collection_lookup":null,"native_row_identity_verified":false});
     let count = data.instances.len() as u64;
     ctx.session.ext.insert(Arc::new(LoadedScene {
         scene: data,
         manifest,
         subject: input.subject.clone(),
         metadata: Arc::new(serde_json::from_slice(take(5)?).map_err(|_| ToolError::invalid("Project metadata is invalid JSON"))?),
+        task_collection_lookup: None,
     }));
     ctx.report(Some(1.), "Scene ready");
     let ev = builder(ctx, "formats_scene_bundle_open", input.subject, params)
@@ -209,8 +214,8 @@ fn formats_scene_bundle_open(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOut
         .limitation(Limitation::new(
             "unverified_render_semantics",
             "Scene geometry and graph were checked; units, axes, materials and native visual parity remain unverified.",
-        ))
-        .build()?;
+        ));
+    let ev = super::scene_project_tools::lookup_evidence(ev, None).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 fn formats_scene_resources_list(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
@@ -363,6 +368,7 @@ mod tests {
             manifest: PathBuf::from("scene.json"),
             subject: target.subject(),
             metadata: Arc::new(json!({})),
+            task_collection_lookup: None,
         }));
         Engine::new(session)
     }

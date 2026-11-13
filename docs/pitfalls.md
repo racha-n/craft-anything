@@ -1175,6 +1175,11 @@ Byte preservation and self-reparse alone do not establish semantic compatibility
 Read-only inspection must distinguish record framing from lookup validity. Retain
 readable task bodies with explicit mismatch coverage; never infer native row identity
 from successful physical record parsing or a valid lookup vector alone.
+Native section order can differ from minimal fixtures: a geometry-bearing control
+stores Tasks later in the directory and retains padding before the first section.
+Resolve sections by name and stored offsets, preserve header padding, and rebuild
+every affected directory offset. A QA guard caught a Task-first assumption before
+writing any fixture data; keep that failed attempt alongside the corrected control.
 
 
 **A small native window can hide a planning pane.** Resizing the native planning app

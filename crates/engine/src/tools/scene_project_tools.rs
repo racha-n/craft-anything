@@ -26,6 +26,7 @@ pub struct LatestProjectFrame {
     pub scene_id: String,
     pub frame: Arc<Frame>,
     pub scene_appearance: Arc<SceneAppearance>,
+    pub task_collection_lookup: Option<craft_anything_formats::sp_project::task_lookup::Report>,
 }
 // Explicit-path metadata calls have their own identity and caches. They must not
 // replace the scene-keyed snapshots consumed by an already open viewport.
@@ -38,16 +39,38 @@ pub struct LatestMetadataFrame {
     pub source_sha256: String,
     pub frame: Arc<Frame>,
     pub model: Arc<ProjectModel>,
+    pub task_collection_lookup: Option<craft_anything_formats::sp_project::task_lookup::Report>,
 }
 pub(super) struct ProjectSource {
     pub scene_id: Option<String>,
     pub source_sha256: String,
     pub subject: Subject,
+    pub task_collection_lookup: Option<craft_anything_formats::sp_project::task_lookup::Report>,
 }
 impl ProjectSource {
     fn identity(&self) -> Value {
         json!({"scene_id":self.scene_id,"source_sha256":self.source_sha256,
-            "geometry_coverage":if self.scene_id.is_some() { "loaded_scene" } else { "unvalidated" }})
+            "geometry_coverage":if self.scene_id.is_some() { "loaded_scene" } else { "unvalidated" },
+            "task_collection_lookup":self.task_collection_lookup,"native_row_identity_verified":false})
+    }
+}
+pub(super) fn lookup_evidence(
+    evidence: craft_anything_evidence::EvidenceBuilder,
+    report: Option<&craft_anything_formats::sp_project::task_lookup::Report>,
+) -> craft_anything_evidence::EvidenceBuilder {
+    use craft_anything_formats::sp_project::task_lookup::Status;
+    let evidence =
+        evidence.limitation(Limitation::new("native_row_identity_unverified", "Task framing and lookup consistency do not verify native row identity."));
+    match report.filter(|r| r.shape_valid()) {
+        None => evidence.limitation(Limitation::new(
+            "task_lookup_unchecked",
+            "Raw project task lookup entries were not checked for this prepared bundle. Retained metadata does not supply fresh source-byte coverage.",
+        )),
+        Some(report) if report.status == Status::Invalid => evidence.limitation(Limitation::new(
+            "invalid_task_lookup",
+            "Readable task bodies have inconsistent collection lookup entries; the source application can display duplicate or missing rows.",
+        )),
+        Some(_) => evidence,
     }
 }
 #[derive(Deserialize, JsonSchema)]
@@ -277,7 +300,12 @@ fn model(ctx: &mut Ctx<'_>, path: Option<&str>) -> Result<(ProjectSource, Arc<Pr
             return Err(ToolError::cancelled());
         }
         let imported = imported.map_err(|e| format_err(e, "admitted project metadata"))?;
-        let source = ProjectSource { scene_id: None, source_sha256: imported.source_sha256, subject: input.subject };
+        let source = ProjectSource {
+            scene_id: None,
+            source_sha256: imported.source_sha256,
+            subject: input.subject,
+            task_collection_lookup: Some(imported.coverage.task_collection_lookup),
+        };
         if let Some(cached) = ctx.session.ext.get::<CachedMetadataProject>()
             && cached.source_sha256 == source.source_sha256
         {
@@ -292,8 +320,12 @@ fn model(ctx: &mut Ctx<'_>, path: Option<&str>) -> Result<(ProjectSource, Arc<Pr
         return Ok((source, parsed));
     }
     let source = ctx.session.ext.get::<LoadedScene>().ok_or_else(|| ToolError::invalid("Open a source project with formats_project_open first."))?;
-    let identity =
-        ProjectSource { scene_id: Some(source.scene.id.clone()), source_sha256: source.scene.source_sha256.clone(), subject: source.subject.clone() };
+    let identity = ProjectSource {
+        scene_id: Some(source.scene.id.clone()),
+        source_sha256: source.scene.source_sha256.clone(),
+        subject: source.subject.clone(),
+        task_collection_lookup: source.task_collection_lookup.clone(),
+    };
     if let Some(cached) = ctx.session.ext.get::<CachedProject>()
         && cached.scene_id == source.scene.id
     {
@@ -324,8 +356,8 @@ fn formats_project_tasks_list(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOu
         .coverage(Coverage { status: CoverageStatus::Partial, ..Default::default() })
         .result(json!({"source":source.identity(),"scene_id":source.scene_id,"page":result}))
         .limitation(Limitation::new("metadata_geometry_scope", "An explicit project path validates metadata only; drawable geometry is not inspected."))
-        .target_content(true)
-        .build()?;
+        .target_content(true);
+    let ev = lookup_evidence(ev, source.task_collection_lookup.as_ref()).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 fn formats_project_costs_list(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
@@ -338,8 +370,8 @@ fn formats_project_costs_list(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOu
         .coverage(Coverage { status: CoverageStatus::Partial, ..Default::default() })
         .result(json!({"source":source.identity(),"scene_id":source.scene_id,"page":result}))
         .limitation(Limitation::new("metadata_geometry_scope", "An explicit project path validates metadata only; drawable geometry is not inspected."))
-        .target_content(true)
-        .build()?;
+        .target_content(true);
+    let ev = lookup_evidence(ev, source.task_collection_lookup.as_ref()).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 fn formats_project_frame_evaluate(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
@@ -391,15 +423,22 @@ fn formats_project_frame_evaluate(ctx: &mut Ctx<'_>, params: Value) -> Result<To
             scene_id: scene_id.clone(),
             frame,
             scene_appearance: scene_appearance.ok_or_else(|| ToolError::invalid("Scene appearance is absent"))?,
+            task_collection_lookup: source.task_collection_lookup.clone(),
         }));
     } else {
-        ctx.session.ext.insert(Arc::new(LatestMetadataFrame { source_sha256: source.source_sha256.clone(), frame, model }));
+        ctx.session.ext.insert(Arc::new(LatestMetadataFrame {
+            source_sha256: source.source_sha256.clone(),
+            frame,
+            model,
+            task_collection_lookup: source.task_collection_lookup.clone(),
+        }));
     }
     let ev=builder(ctx,"formats_project_frame_evaluate",source.subject.clone(),params).summary("Evaluated project appearance and cost state")
         .confidence(Confidence::Derived).coverage(Coverage {status:CoverageStatus::Partial,..Default::default()}).result(result)
         .limitation(Limitation::new("scoped_source_semantics","Unresolved profiles or monetary allocations remain explicit. Source-unit, calendar and phase support is limited to admitted structures; this is not application-wide parity."))
         .limitation(Limitation::new("metadata_geometry_scope", "An explicit project path validates metadata only; drawable geometry is not inspected."))
-        .target_content(true).build()?;
+        .target_content(true);
+    let ev = lookup_evidence(ev, source.task_collection_lookup.as_ref()).build()?;
     Ok(ToolOutput::evidence(ev))
 }
 
@@ -445,6 +484,33 @@ pub(super) mod tests {
         raw
     }
     #[test]
+    fn prepared_bundle_coverage_stays_unknown_even_with_an_embedded_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fixture = craft_anything_testkit::scene_bundle::fixture();
+        let mut metadata: Value = serde_json::from_slice(&fixture[5]).unwrap();
+        metadata["tasks"] = json!([]);
+        metadata["definition_storage"] = json!({});
+        metadata["coverage"] = json!({"task_collection_lookup":{"version":1,"status":"valid","collections_checked":0,"entries_checked":0,"mismatched_collections":0,"mismatched_entries":0,"native_row_identity_verified":false}});
+        fixture[5] = serde_json::to_vec(&metadata).unwrap();
+        for ((name, _), bytes) in craft_anything_formats::scene_bundle::MEMBERS.iter().zip(fixture) {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let engine = Engine::new(crate::testing::session());
+        let call = |id, params| engine.call(id, params, CallOptions::new(Caller::Cli)).map(|o| o.to_json());
+        let opened = call("formats_scene_bundle_open", json!({"path":dir.path().join("scene.json")})).unwrap();
+        assert!(opened["result"]["task_collection_lookup"].is_null());
+        let loaded = engine.session().ext.get::<LoadedScene>().unwrap();
+        assert_eq!(loaded.metadata["coverage"]["task_collection_lookup"]["status"], "valid");
+        assert!(loaded.task_collection_lookup.is_none());
+        for (id, params) in [("formats_project_tasks_list", json!({})), ("formats_project_frame_evaluate", json!({"focus_wallclock":0}))] {
+            let result = call(id, params).unwrap();
+            assert!(result["result"]["source"]["task_collection_lookup"].is_null());
+            assert_eq!(result["result"]["source"]["native_row_identity_verified"], false);
+            assert!(result["limitations"].as_array().unwrap().iter().any(|v| v["code"] == "task_lookup_unchecked"));
+        }
+        assert!(engine.session().ext.get::<LatestProjectFrame>().unwrap().task_collection_lookup.is_none());
+    }
+    #[test]
     fn selection_links_use_direct_assignments_and_reject_other_scene_ids() {
         let dir = tempfile::tempdir().unwrap();
         for ((name, _), bytes) in craft_anything_formats::scene_bundle::MEMBERS.iter().zip(craft_anything_testkit::scene_bundle::fixture()) {
@@ -462,6 +528,7 @@ pub(super) mod tests {
                 scene: source.scene.clone(),
                 manifest: source.manifest.clone(),
                 subject: source.subject.clone(),
+                task_collection_lookup: None,
                 metadata: Arc::new(metadata),
             }));
             id
@@ -508,6 +575,7 @@ pub(super) mod tests {
                 scene: source.scene.clone(),
                 manifest: source.manifest.clone(),
                 subject: source.subject.clone(),
+                task_collection_lookup: None,
                 metadata: Arc::new(metadata),
             }));
         }
@@ -555,6 +623,7 @@ pub(super) mod tests {
                 scene: source.scene.clone(),
                 manifest: source.manifest.clone(),
                 subject: source.subject.clone(),
+                task_collection_lookup: None,
                 metadata: Arc::new(json!({"schema_version":4,"tasks":[],"resources":resources,"definition_storage":{}})),
             }));
         }
@@ -593,6 +662,7 @@ pub(super) mod tests {
                 scene: source.scene.clone(),
                 manifest: source.manifest.clone(),
                 subject: source.subject.clone(),
+                task_collection_lookup: None,
                 metadata: Arc::new(json!({"schema_version":4,"tasks":[task],"resources":[],"definition_storage":{}})),
             }));
         }

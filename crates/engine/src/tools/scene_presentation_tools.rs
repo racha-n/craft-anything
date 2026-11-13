@@ -588,7 +588,12 @@ fn report(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         params,
         ReportInput {
             template,
-            source: scene_project_tools::ProjectSource { scene_id: Some(p.scene_id), source_sha256: s.scene.source_sha256.clone(), subject: s.subject.clone() },
+            source: scene_project_tools::ProjectSource {
+                scene_id: Some(p.scene_id),
+                source_sha256: s.scene.source_sha256.clone(),
+                subject: s.subject.clone(),
+                task_collection_lookup: s.task_collection_lookup.clone(),
+            },
             model,
             audit,
             output,

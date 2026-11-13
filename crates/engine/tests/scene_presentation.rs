@@ -25,6 +25,7 @@ fn setup() -> (tempfile::TempDir, Engine, String) {
             scene: s.scene.clone(),
             manifest: s.manifest.clone(),
             subject: s.subject.clone(),
+            task_collection_lookup: None,
             metadata: Arc::new(metadata),
         }));
         id

@@ -26,6 +26,19 @@ pub struct State {
     #[serde(default)]
     pub profile_effects: bool,
 }
+pub(super) fn lookup_coverage(ui: &mut Ui, report: Option<&craft_anything_formats::sp_project::task_lookup::Report>) {
+    use craft_anything_formats::sp_project::task_lookup::Status;
+    let report = report.filter(|r| r.shape_valid());
+    let text = match report {
+        None => "Task lookup: unknown · Native rows unverified".to_owned(),
+        Some(r) if r.status == Status::Valid => "Task lookup: consistent · Native rows unverified".to_owned(),
+        Some(r) => {
+            format!("Task lookup: inconsistent · Entries: {} · Collections: {} · Native rows unverified", r.mismatched_entries, r.mismatched_collections)
+        }
+    };
+    let response = if report.is_some_and(|r| r.status == Status::Invalid) { ui.strong(text) } else { ui.weak(text) };
+    response.on_hover_text("Lookup coverage checks stored task collection indices, separately from readable task bodies. Inconsistent indices can make the source application show duplicate or missing rows. Prepared bundles without checked source bytes remain unknown.");
+}
 pub fn wallclock(value: i64) -> String {
     let mut days = value.div_euclid(86400);
     let seconds = value.rem_euclid(86400);

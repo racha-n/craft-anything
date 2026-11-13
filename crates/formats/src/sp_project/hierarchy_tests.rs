@@ -278,3 +278,36 @@ fn read_only_lookup_coverage_exceeds_writer_scope_and_remains_cancellable() {
     assert_eq!(task_lookup::audit(&data, &rows, &mut |_| false).unwrap_err().code, "cancelled");
     assert_eq!(task_lookup::audit(&section(&[]), &[], &mut |_| false).unwrap_err().code, "cancelled");
 }
+
+#[test]
+fn transported_lookup_report_shape_keeps_unknown_versions_counts_and_native_claims_untrusted() {
+    let raw = project(&[record(1)]);
+    let report = parse_metadata(&raw, |_| true).unwrap().coverage.task_collection_lookup;
+    assert!(report.shape_valid());
+    let encoded = serde_json::to_value(&report).unwrap();
+    let decoded: task_lookup::Report = serde_json::from_value(encoded).unwrap();
+    assert!(decoded.shape_valid());
+    let mut bad = report.clone();
+    bad.version = 2;
+    assert!(!bad.shape_valid());
+    bad = report.clone();
+    bad.native_row_identity_verified = true;
+    assert!(!bad.shape_valid());
+    bad = report.clone();
+    bad.entries_checked = RECORD_LIMIT + 1;
+    assert!(!bad.shape_valid());
+    bad = report.clone();
+    bad.collections_checked = 2;
+    assert!(!bad.shape_valid());
+    bad = report.clone();
+    bad.status = task_lookup::Status::Invalid;
+    assert!(!bad.shape_valid());
+    bad = report.clone();
+    bad.mismatched_entries = 1;
+    assert!(!bad.shape_valid());
+    bad = report;
+    bad.status = task_lookup::Status::Invalid;
+    bad.mismatched_entries = 1;
+    bad.mismatched_collections = 1;
+    assert!(bad.shape_valid());
+}

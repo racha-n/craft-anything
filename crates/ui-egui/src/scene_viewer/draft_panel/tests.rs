@@ -71,6 +71,7 @@ fn retained_scene(path: &std::path::Path, hash: &str) -> Arc<craft_anything_engi
         manifest: path.to_owned(),
         subject: serde_json::from_value(json!({"kind":"project","sha256":hash,"name":"retained.sp"})).unwrap(),
         metadata: Arc::new(json!({"retained":true})),
+        task_collection_lookup: None,
         scene: Arc::new(Scene {
             id: "retained".into(),
             source_sha256: hash.into(),
@@ -94,6 +95,81 @@ fn retained_scene(path: &std::path::Path, hash: &str) -> Arc<craft_anything_engi
             node_count: 0,
         }),
     })
+}
+
+#[test]
+fn metadata_lookup_warning_uses_its_source_and_keeps_retained_scene_unknown() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad-lookup.sp");
+    let raw = metadata_fixture_count(3);
+    let parsed = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap();
+    let section = &parsed.metadata["sections"]["Tasks"];
+    let start = section["file_offset"].as_u64().unwrap() as usize;
+    let end = start + section["stored_bytes"].as_u64().unwrap() as usize;
+    let mut data = raw[start + 14..end - 4].to_vec();
+    let first = &parsed.metadata["tasks"][0];
+    let at = (first["offset"].as_u64().unwrap() + first["bytes"].as_u64().unwrap() - 4) as usize;
+    data[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut stored = b"\x01\x05Tasks".to_vec();
+    stored.extend(craft_anything_testkit::games::zlib_stored(&data));
+    assert_eq!(stored.len(), end - start);
+    let mut bad = raw;
+    bad[start..end].copy_from_slice(&stored);
+    std::fs::write(&path, &bad).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&bad, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let retained = retained_scene(&dir.path().join("retained.sp"), &"a".repeat(64));
+    engine.session().ext.insert(retained.clone());
+    let mut app = SceneApp::with_engine(engine.clone(), None, String::new());
+    app.initial_open = false;
+    app.model = Some(retained.clone());
+    app.metadata = Some(super::super::metadata_panel::MetadataPanel::new(engine.clone(), path.to_string_lossy().into_owned()));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200., 1000.)).build_ui_state(|ui, app: &mut SceneApp| app.show(ui), app);
+    crate::theme::install_fonts(&h.ctx);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while h.state().metadata.as_ref().unwrap().draft_source().is_none() {
+        h.step();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run();
+    assert_eq!(engine.session().ext.get::<craft_anything_engine::tools::scene_project_tools::LatestMetadataFrame>().unwrap().source_sha256, hash);
+    assert!(Arc::ptr_eq(h.state().model.as_ref().unwrap(), &retained));
+    assert!(retained.task_collection_lookup.is_none());
+    for (name, planning) in [("lookup-metadata-studio.png", false), ("lookup-metadata-planning.png", true)] {
+        h.state_mut().state.planning.enabled = planning;
+        h.run();
+        let _ = h.get_by_label("Task lookup: inconsistent · Entries: 1 · Collections: 1 · Native rows unverified");
+        if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+            let folder = std::path::PathBuf::from(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            let image = folder.join(name);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+        }
+    }
+    h.get_by_label("Project draft").click();
+    h.run_steps(2);
+    while h.state().draft.as_ref().is_none_or(|p| p.state.snapshot.is_none() || p.jobs.busy()) {
+        h.step();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let snapshot = h.state().draft.as_ref().unwrap().state.snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.task_collection_lookup.as_ref().unwrap().status, craft_anything_formats::sp_project::task_lookup::Status::Invalid);
+    h.get_by_label("Close draft").click();
+    h.run_steps(2);
+    while h.state().draft.as_ref().is_some_and(DraftPanel::active) {
+        h.step();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.get_by_label("Back to 3D viewer").click();
+    h.run_steps(2);
+    let _ = h.get_by_label("Task lookup: unknown · Native rows unverified");
+    assert!(Arc::ptr_eq(h.state().model.as_ref().unwrap(), &retained));
+    assert_eq!(std::fs::read(path).unwrap(), bad);
 }
 
 #[test]
@@ -304,6 +380,7 @@ fn widget_actions_refresh_shared_revision_and_export_mixed_without_changing_sour
 
 fn snapshot(id: u64, revision: u64) -> Snapshot {
     Snapshot {
+        task_collection_lookup: None,
         version: 1,
         draft_id: id,
         source_sha256: "a".repeat(64),
@@ -376,6 +453,34 @@ fn reordered_snapshot_preserves_selected_guid_and_rejects_invalid_positions() {
     state.order_position = 2;
     assert!(state.accept(next, &source, Some(1)).is_err());
     assert_eq!(state.order_position, 2);
+}
+
+#[test]
+fn lookup_report_guards_preserve_forms_and_keep_older_responses_unknown() {
+    let source = "a".repeat(64);
+    let original = snapshot(1, 0);
+    let mut legacy = serde_json::to_value(&original).unwrap();
+    legacy.as_object_mut().unwrap().remove("task_collection_lookup");
+    let decoded: Snapshot = serde_json::from_value(legacy).unwrap();
+    assert!(decoded.task_collection_lookup.is_none());
+    let mut state = State::default();
+    state.accept(decoded, &source, None).unwrap();
+    state.labels.name = "Unapplied".into();
+    let report = craft_anything_formats::sp_project::parse_metadata(&metadata_fixture(), |_| true).unwrap().coverage.task_collection_lookup;
+    for kind in 0..3 {
+        let mut value = original.clone();
+        value.revision = 1;
+        let mut bad = report.clone();
+        match kind {
+            0 => bad.native_row_identity_verified = true,
+            1 => bad.version = 2,
+            _ => bad.entries_checked = 2,
+        }
+        value.task_collection_lookup = Some(bad);
+        assert!(state.accept(value, &source, Some(1)).is_err());
+        assert_eq!(state.snapshot.as_ref().unwrap().revision, 0);
+        assert_eq!(state.labels.name, "Unapplied");
+    }
 }
 
 #[test]
