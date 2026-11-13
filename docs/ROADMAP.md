@@ -2504,7 +2504,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
       - [x] Identify the trailing task words as a collection GUID lookup vector and confirm five native root/child collections plus independent three-task cycles; general hierarchy relocation still needs its own writer and native acceptance.
       - [x] Add a bounded source-bound subtree reparent candidate with guarded parent/position, cycle/depth checks, task-body preservation, rebuilt collection lookup vectors and independent native indent/outdent acceptance. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
       - [x] Integrate sequential order/reparent operations with shared draft history, GUID focus and bounded Indent/Outdent forms; preserve legacy export contracts and validate native summary-date previews before broader Plan admission. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
-      - [ ] Surface invalid task collection lookup vectors in read-only metadata inspection before claiming native row-identity coverage.
+      - [ ] Surface invalid task collection lookup vectors in read-only metadata inspection before claiming native row-identity coverage. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
       - [ ] Validate default-task construction and collection bookkeeping before task creation/deletion candidates, including the separate Supply Chain ID identified by native serialization; a new primary task GUID alone is insufficient.
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
