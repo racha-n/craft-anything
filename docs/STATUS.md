@@ -272,6 +272,19 @@ were unchanged. The desktop was not rebuilt for this headless change. Shared dra
 source tasks, geometry-bearing creation, deletion and generic native Save remain
 pending. See [the candidate contract](4d5d-completion.md#default-work-task-storage-candidate).
 
+### Geometry-bearing default constructor controls (R3.14)
+
+Two native controls retain a Planned root's existing assignment and its two mesh
+instances/one definition while adding unassigned default Work roots. Native save,
+unload/reopen and 205 new/retained General comparisons passed; retained task bodies
+and the 43 unrelated native-save sections stayed unchanged. Two Tasks-only root
+prototypes match the controls and preserve other47 source sections; separate native
+prototype acceptance is running. Twelve declared cost/Resource-phase frame checks,
+six viewer layout images, two native row images and protected57 hashes passed.
+The existing canonical viewer verifier was reused without rebuilding; native pixel,
+monetary and phase parity remain unverified. Production source admission is unchanged.
+See [the geometry control boundary](4d5d-completion.md#geometry-bearing-constructor-controls).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

@@ -674,3 +674,37 @@ final native images were inspected; all 57 protected sources remained unchanged.
 The desktop was not rebuilt for this headless change. Shared
 creation draft/history/forms, geometry-bearing creation, deletion, broader task
 construction and generic native Save remain pending.
+
+## Geometry-bearing constructor controls
+
+Two native controls extend the study to a small geometry-bearing source. Its one
+Planned root task has one assignment linked to two mesh instances of one definition.
+The first native insertion creates a default one-day Work task above that assigned
+leaf, with no assignment copied into the new task. The second creates another
+default root task above the first. Both pass Save As/unload/reopen; new and retained
+General dictionaries match (205 property comparisons), and every retained task
+body remains exact apart from its collection lookup entry. Native creation changes
+the same five transaction/task/presentation sections; the other 43 stored sections,
+including Resources and geometry, stay unchanged.
+
+Removing only the template's assignment array/count produces the same normalized
+default-body profile as the unassigned controls. Two diagnostic root prototypes
+using that construction match the native Tasks bytes and preserve all other 47
+source sections. Their separate native candidate acceptance is running; production
+scope is not widened by these controls alone.
+
+Current CLI/model evaluation at four focus values for baseline/first/second control
+retains identical declared cost payloads, Resource phases and timeline bounds
+(12 frame comparisons). This is preservation under existing declared policies;
+native monetary/phase parity remains false. The existing canonical GPU verifier
+renders two instances in both layouts for all three sources. Six viewer images and
+two native row images were inspected; the native viewport's before-work focus does
+not establish pixel parity. The verifier was reused without rebuilding, while the
+current CLI verified source hashes and geometry counts. All 57 protected hashes
+remain unchanged.
+
+The next codec change is limited to flat Planned roots retaining at most one
+assignment per task and no other task associations. It must emit an unassigned
+default leaf, disclose omitted template assignments in a version-2 receipt and
+preserve the existing unassigned hierarchy subset. Assigned children, general task
+cloning, assignment creation/editing and native transaction reproduction stay open.
