@@ -279,11 +279,33 @@ instances/one definition while adding unassigned default Work roots. Native save
 unload/reopen and 205 new/retained General comparisons passed; retained task bodies
 and the 43 unrelated native-save sections stayed unchanged. Two Tasks-only root
 prototypes match the controls and preserve other47 source sections; separate native
-prototype acceptance is running. Twelve declared cost/Resource-phase frame checks,
+prototype acceptance passed 410 General comparisons. Twelve declared cost/Resource-phase
+frame checks,
 six viewer layout images, two native row images and protected57 hashes passed.
 The existing canonical viewer verifier was reused without rebuilding; native pixel,
-monetary and phase parity remain unverified. Production source admission is unchanged.
+monetary and phase parity remain unverified. The control-only commit leaves production
+admission unchanged; the v2 extension below records subsequent source admission.
 See [the geometry control boundary](4d5d-completion.md#geometry-bearing-constructor-controls).
+
+### Assigned-root default candidates (R3.14)
+
+Receipt v2 distinguishes the existing unassigned hierarchy subset from flat Planned
+roots retaining at most one assignment per task. Assigned roots all require the
+known default body/calendar/Planned state; other task associations, assigned children
+and multiple assignments reject. Template assignment records are omitted only from
+the new default task, with typed omitted/new counts; original bodies and other47
+sections remain preserved. The v1 schema stays available. Fourteen focused format
+cases and two geometry prototypes' native round trips/410 General comparisons pass.
+All twelve frozen checks pass with 2,533 formats/engine target tests
+(19 ignored), strict clippy, layers, locks, staged secrets, tools, wasm, doctests
+and formatting. Five actual CLI outputs validate against schema2; the three legacy
+SP files remain fully byte-identical to their accepted v1 files. Sixteen refusals
+publish nothing or replace nothing. Both actual geometry CLI files pass native
+Save As/unload/reopen and 410 full General comparisons. Twelve declared phase/cost
+frames, four fresh viewer images and two native row images pass, with 57 protected
+hashes unchanged. The canonical viewer verifier is reused; the desktop is not
+rebuilt. Shared creation draft/UI and generic native Save remain pending.
+See [the version-2 contract](4d5d-completion.md#assigned-root-default-work-candidates-version-2).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

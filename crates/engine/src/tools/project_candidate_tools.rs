@@ -183,7 +183,7 @@ pub fn specs() -> Vec<ToolSpec> {
         spec(
             "formats_project_sp_task_create_candidate_write",
             "Write an experimental default Work task candidate",
-            "Insert one default Planned Work leaf above an existing Work leaf, using an exact source hash, guarded parent/position, validated default body/state/calendar and distinct task/Supply Chain identities. Require explicit name/display ID, preserve other sections and publish a version-1 receipt. Native transaction history and generic native saving remain unverified.",
+            "Insert one unassigned default Planned Work leaf above an existing Work leaf, using a source hash, guarded parent/position, validated default body/state/calendar and distinct task/Supply Chain identities. Support unassigned hierarchies or flat Planned roots with at most one retained assignment per task; omit template assignments and disclose their count in a version-2 receipt. Require explicit name/display ID and preserve other sections. Native transaction history and generic native saving remain unverified.",
             "Create a separate test copy with one new one-day task, then validate all affected rows in the source application.",
             Toolset::Formats,
             Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),

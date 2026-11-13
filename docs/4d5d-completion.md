@@ -624,6 +624,9 @@ unadmitted. Shared draft/UI creation requires a separately claimed implementatio
 
 ## Default Work task storage candidate
 
+This section records the original version-1 contract and acceptance. The assigned-root
+version-2 extension below describes the current tool output and broader admission.
+
 `formats_project_sp_task_create_candidate_write` inserts one new Planned Work leaf
 above an existing Work leaf in its current root or nonempty child collection.
 Callers acknowledge storage-only generation and supply an exact source SHA-256,
@@ -690,8 +693,8 @@ including Resources and geometry, stay unchanged.
 Removing only the template's assignment array/count produces the same normalized
 default-body profile as the unassigned controls. Two diagnostic root prototypes
 using that construction match the native Tasks bytes and preserve all other 47
-source sections. Their separate native candidate acceptance is running; production
-scope is not widened by these controls alone.
+source sections. Their separate native candidate acceptance passed 410 complete
+General comparisons; production scope is not widened by these controls alone.
 
 Current CLI/model evaluation at four focus values for baseline/first/second control
 retains identical declared cost payloads, Resource phases and timeline bounds
@@ -708,3 +711,46 @@ assignment per task and no other task associations. It must emit an unassigned
 default leaf, disclose omitted template assignments in a version-2 receipt and
 preserve the existing unassigned hierarchy subset. Assigned children, general task
 cloning, assignment creation/editing and native transaction reproduction stay open.
+
+## Assigned-root default Work candidates, version 2
+
+The same headless candidate tool emits version-2 receipts. The version-1 schema and
+its prior native-accepted examples remain available. `source_scope` distinguishes
+`planned_unassigned` (the existing unassigned hierarchy subset) from
+`flat_planned_single_assignments` (only flat Planned roots, at most one assignment
+per source task, and no links, direct costs, progress, expense reports, codes or user
+values). Assigned source roots must all match the complete normalized default Work
+body and share the admitted explicit default calendar and Planned state definition.
+The one-day/default-calendar/start/identity/position bounds remain unchanged.
+
+An assigned leaf may supply the template or anchor in the flat subset. Its checked
+assignment array is replaced by an empty list only in the new task; original task
+and assignment bytes remain exact apart from collection lookup entries. The
+normalized body profile excludes that array/count in addition to the explicitly
+replaced fields and separately checked definition references. This is a default
+constructor, with no task-cloning or assignment-editing capability implied.
+
+The receipt adds typed `source_scope`, `template_assignments_omitted` (0 or 1) and
+`new_task_assignment_count` (0). Its standalone
+[version-2 schema](schemas/sp-task-create-candidate-receipt-v2.schema.json) retains
+the false native/transaction/schedule/geometry/completeness flags. Unassigned-source
+SP outputs must remain byte-identical to the three previously accepted CLI files.
+Assigned hierarchies, multiple assignments per task and nondefault source bodies
+reject before publication. Existing source hashes, lookup/vector checks, output
+budgets, cancellation and no-clobber candidate/receipt publication still apply.
+
+Fourteen focused format cases and six candidate-engine cases pass. All twelve frozen
+checks pass, including CLI/xtask build, 2,533 formats/engine all-target tests
+(19 ignored), strict clippy, layers, locks, staged secrets, generated tools, wasm,
+doctests and formatting; both receipt schemas remain frozen and v1 byte-identical.
+All five actual CLI outputs pass schema2/control checks. Three legacy SP files stay
+byte-identical to the previously native-accepted v1 files, reusing their 972 General
+comparisons by full-file identity. Sixteen refusal cases publish no new candidate or
+receipt and preserve existing outputs. Both actual geometry CLI files pass native
+Save As/unload/reopen and 410 complete General comparisons, with exact Tasks bytes
+and unchanged candidate/receipt hashes. Twelve declared Resource-phase/cost frames,
+2-instance/1-definition imports, four new viewer images and two fresh native row
+images pass; all 57 protected hashes stay unchanged. The canonical viewer verifier
+is reused without rebuilding, and the desktop is not rebuilt for this headless
+change. Native pixel/monetary/phase/transaction parity, shared creation draft/UI and
+generic native Save remain unadmitted.

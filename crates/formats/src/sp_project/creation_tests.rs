@@ -157,6 +157,95 @@ fn project_parts(task_data: &[u8], calendar_data: &[u8], state_data: &[u8]) -> V
 fn project(rows: &[Vec<u8>]) -> Vec<u8> {
     project_parts(&section(rows), &calendars(), &states())
 }
+fn assigned_record(byte: u8, start: u64, duration: u64, count: usize) -> Vec<u8> {
+    let mut row = record(byte, start, duration);
+    set(&mut row, 33, &(count as u32).to_le_bytes());
+    let mut assignment = vec![0; 235];
+    set(&mut assignment, 0, &[0x99, 0xd8, 0x23, 0x46]);
+    set(&mut assignment, 12, &[0x22; 16]);
+    set(&mut assignment, 131, &[0x33; 16]);
+    set(&mut assignment, 163, &5f64.to_le_bytes());
+    set(&mut assignment, 171, &(500f64 / 3.).to_le_bytes());
+    for at in [179, 187, 195] {
+        set(&mut assignment, at, &f64::NAN.to_le_bytes());
+    }
+    for _ in 0..count {
+        row.splice(37..37, assignment.iter().copied());
+    }
+    row
+}
+fn assigned_project(rows: &[Vec<u8>]) -> Vec<u8> {
+    fn list(b: &mut Vec<u8>) {
+        b.extend(OPEN);
+        b.extend([0; 4]);
+        b.extend(CLOSE);
+    }
+    fn refs(b: &mut Vec<u8>) {
+        b.extend([0xd0, 0xbc, 0xa1, 0x06, 0, 0, 0, 0, 0x2c, 0x57, 0xd9, 0xda]);
+    }
+    let mut resources = empty_section();
+    resources.truncate(28);
+    resources.extend(1u32.to_le_bytes());
+    resources.extend([0x31, 0x5c, 0xa8, 0x57]);
+    resources.extend([0; 8]);
+    resources.extend([0x33; 16]);
+    resources.extend(text("Material"));
+    resources.extend(text(""));
+    resources.extend([0; 32]);
+    refs(&mut resources);
+    resources.extend([0, 0, 0, 0, 4, 0, 0, 0]);
+    list(&mut resources);
+    resources.extend([0; 20]);
+    resources.extend(text(""));
+    resources.push(0);
+    resources.extend(text(""));
+    resources.extend(text(""));
+    list(&mut resources);
+    resources.extend([0; 31]);
+    refs(&mut resources);
+    resources.extend([0; 5]);
+    refs(&mut resources);
+    resources.extend([0; 16]);
+    resources.extend([0xad, 0xe2, 0xb3, 0x4c]);
+    resources.extend([0; 4]);
+    resources.extend(CLOSE);
+    let mut profiles = empty_section();
+    profiles.truncate(28);
+    profiles.extend(1u32.to_le_bytes());
+    profiles.extend([0xc1, 0xcf, 0xd6, 0xe8]);
+    profiles.extend([0; 8]);
+    profiles.extend([0x22; 16]);
+    profiles.extend(text(""));
+    let mut tail = vec![0; 247];
+    set(&mut tail, 2, &1u32.to_le_bytes());
+    for at in [6, 69, 176] {
+        set(&mut tail, at, &[0x10, 0x48, 0x69, 0x23]);
+        set(&mut tail, at + 59, &[0x6c, 0x4a, 0x92, 0x90]);
+    }
+    set(&mut tail, 132, OPEN);
+    set(&mut tail, 140, CLOSE);
+    set(&mut tail, 239, &[0x3d, 0xc8, 0xb0, 0x03]);
+    profiles.extend(tail);
+    profiles.extend(CLOSE);
+    let old = project(rows);
+    let c = container(&old, &mut |_| true).unwrap();
+    let mut slots: Vec<_> = c.sections.iter().collect();
+    slots.sort_by_key(|(_, s)| s.file_offset);
+    let mut result = old[..2344].to_vec();
+    for (i, (name, s)) in slots.iter().enumerate() {
+        let offset = result.len() as u64;
+        set(&mut result, 80 + i * 48, &offset.to_le_bytes());
+        if name.as_str() == "Resources" || name.as_str() == "Use Profiles" {
+            let payload = if name.as_str() == "Resources" { &resources } else { &profiles };
+            result.extend([1, name.len() as u8]);
+            result.extend(name.as_bytes());
+            result.extend(miniz_oxide::deflate::compress_to_vec_zlib(payload, 6));
+        } else {
+            result.extend(&old[s.file_offset..s.file_offset + s.stored_bytes]);
+        }
+    }
+    result
+}
 fn request(anchor: u8, parent: Option<u8>, index: usize) -> InsertAbove {
     InsertAbove {
         template_task_guid: id(0x11),
@@ -196,6 +285,64 @@ fn root_insertion_uses_default_duration_anchor_date_and_independent_identities()
     assert!(result.receipt.existing_task_bodies_preserved && result.receipt.task_state_definition_validated);
     assert!(!result.receipt.native_reopen_verified && !result.receipt.native_transaction_history_reproduced && !result.receipt.native_row_identity_verified);
     assert_eq!(task_lookup::audit(&data, &parsed, &mut |_| true).unwrap().status, task_lookup::Status::Valid);
+}
+
+#[test]
+fn assigned_template_emits_unassigned_default_and_retains_original_assignment_bytes() {
+    let raw = assigned_project(&[assigned_record(0x11, MON, 86_400, 1)]);
+    let before = payload(&raw);
+    let source = tasks(&before, &mut |_| true).unwrap();
+    assert_eq!(source[0].assignments.len(), 1);
+    let result = apply(&raw, &request(0x11, None, 0));
+    let data = payload(&result.bytes);
+    let after = tasks(&data, &mut |_| true).unwrap();
+    assert!(after[0].assignments.is_empty());
+    assert_eq!(after[0].duration_storage_scalar, DURATION);
+    assert_eq!(after[1].assignments.len(), 1);
+    assert_eq!(&before[source[0].offset..source[0].offset + source[0].bytes - 4], &data[after[1].offset..after[1].offset + after[1].bytes - 4]);
+    assert_eq!(result.receipt.version, 2);
+    assert_eq!(result.receipt.source_scope, SourceScope::FlatPlannedSingleAssignments);
+    assert_eq!(result.receipt.template_assignments_omitted, 1);
+    assert_eq!(result.receipt.new_task_assignment_count, 0);
+}
+
+#[test]
+fn unassigned_root_template_can_retain_another_assigned_root() {
+    let raw = assigned_project(&[record(0x11, MON, DURATION), assigned_record(0x44, WED, 57_600, 1)]);
+    let result = apply(&raw, &request(0x11, None, 0));
+    assert_eq!(result.receipt.source_scope, SourceScope::FlatPlannedSingleAssignments);
+    assert_eq!(result.receipt.template_assignments_omitted, 0);
+    let parsed = parse_metadata(&result.bytes, |_| true).unwrap();
+    assert_eq!(parsed.metadata["tasks"][2]["assignments"].as_array().unwrap().len(), 1);
+    assert!(result.receipt.sections.iter().filter(|s| s.name != "Tasks").all(|s| s.stored_bytes_preserved));
+}
+
+#[test]
+fn assigned_source_rejects_children_multiple_assignments_and_nonplanned_tasks() {
+    let cases = [
+        assigned_project(&[nested(record(0x44, MON, DURATION), &[assigned_record(0x11, MON, DURATION, 1)])]),
+        assigned_project(&[assigned_record(0x11, MON, DURATION, 2)]),
+    ];
+    for raw in cases {
+        assert!(parse_metadata(&raw, |_| true).is_ok());
+        assert!(candidate(&raw, &writer::hash(&raw, &mut |_| true).unwrap(), &request(0x11, None, 0), |_| true).is_err());
+    }
+    let row = assigned_record(0x11, MON, DURATION, 1);
+    let data = section(std::slice::from_ref(&row));
+    let task = tasks(&data, &mut |_| true).unwrap().remove(0);
+    let mut row = row;
+    set(&mut row, task.display_id_end + 25 - 32, &2u32.to_le_bytes());
+    let raw = assigned_project(&[row]);
+    assert!(candidate(&raw, &writer::hash(&raw, &mut |_| true).unwrap(), &request(0x11, None, 0), |_| true).is_err());
+}
+
+#[test]
+fn assigned_source_requires_known_default_bodies_even_outside_the_chosen_template() {
+    let mut other = assigned_record(0x44, WED, 57_600, 1);
+    other[8] ^= 1;
+    let raw = assigned_project(&[record(0x11, MON, DURATION), other]);
+    assert!(parse_metadata(&raw, |_| true).is_ok());
+    assert!(candidate(&raw, &writer::hash(&raw, &mut |_| true).unwrap(), &request(0x11, None, 0), |_| true).is_err());
 }
 #[test]
 fn child_insertion_preserves_parent_body_and_nonidentity_collection_vectors() {

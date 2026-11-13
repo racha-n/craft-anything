@@ -22,6 +22,12 @@ pub struct InsertAbove {
     pub name: String,
     pub display_id: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceScope {
+    PlannedUnassigned,
+    FlatPlannedSingleAssignments,
+}
 #[derive(Serialize)]
 pub struct Receipt {
     pub version: u32,
@@ -29,6 +35,9 @@ pub struct Receipt {
     pub output_sha256: String,
     pub admitted_build: &'static str,
     pub insertion: InsertAbove,
+    pub source_scope: SourceScope,
+    pub template_assignments_omitted: usize,
+    pub new_task_assignment_count: usize,
     pub default_profile_sha256: &'static str,
     pub planned_start_wallclock_scalar: u64,
     pub duration_storage_scalar: u64,
@@ -101,17 +110,24 @@ fn profile(data: &[u8], task: &Task, all: &[Task], callback: &mut dyn FnMut(f32)
     if all.iter().any(|t| t.parent_guid.as_deref() == Some(task.guid.as_str())) {
         return Err(fail("unsupported_layout", "Choose existing Work leaves for template and anchor"));
     }
-    if task.name_offset != checked_add(task.offset, 73)? || task.display_id_offset != checked_add(task.name_end, 196)? {
+    let assignment_bytes = task.assignments.len().checked_mul(235).ok_or_else(|| fail("limit", "Template assignment bytes"))?;
+    if task.assignments.len() > 1
+        || task.name_offset != checked_add(checked_add(task.offset, 73)?, assignment_bytes)?
+        || task.display_id_offset != checked_add(task.name_end, 196)?
+    {
         return Err(fail("unsupported_layout", "Default Work string framing differs from the observed profile"));
     }
     marker(data, checked_add(task.name_end, 16)?, &[0])?;
     marker(data, checked_add(task.name_end, 94)?, &[0xb3, 0x0c, 0x9c, 0xd1])?;
     let end = checked_add(task.offset, task.bytes)?.checked_sub(4).ok_or_else(|| fail("truncated", "Task body end"))?;
     let mut normal = Vec::new();
-    for (at, count) in [(task.offset, 12), (checked_add(task.offset, 28)?, 29)] {
-        append(&mut normal, bytes(data, at, count)?)?;
-        append(&mut normal, &[0; 16])?;
-    }
+    append(&mut normal, bytes(data, task.offset, 12)?)?;
+    append(&mut normal, &[0; 16])?;
+    append(&mut normal, bytes(data, checked_add(task.offset, 28)?, 5)?)?;
+    append(&mut normal, &[0; 4])?;
+    let assignment_end = checked_add(checked_add(task.offset, 37)?, assignment_bytes)?;
+    append(&mut normal, bytes(data, assignment_end, 20)?)?;
+    append(&mut normal, &[0; 16])?;
     append(&mut normal, b"<NAME>")?;
     append(&mut normal, &[0; 16])?;
     append(&mut normal, bytes(data, checked_add(task.name_end, 16)?, 82)?)?;
@@ -126,6 +142,28 @@ fn profile(data: &[u8], task: &Task, all: &[Task], callback: &mut dyn FnMut(f32)
         return Err(fail("unsupported_layout", "Default Work body contains fields outside the observed constructor profile"));
     }
     Ok(())
+}
+fn scope(all: &[Task]) -> Result<SourceScope> {
+    let assigned = all.iter().any(|t| !t.assignments.is_empty());
+    if all.iter().any(|t| {
+        t.status_storage_value != 1
+            || t.assignments.len() > 1
+            || !t.links.is_empty()
+            || !t.direct_costs.is_empty()
+            || !t.progress_records.is_empty()
+            || !t.actual_expense_reports.is_empty()
+            || !t.activity_code_refs.is_empty()
+            || !t.user_values.is_empty()
+    }) {
+        return Err(fail(
+            "unsupported_layout",
+            "Task insertion requires Planned tasks with at most one retained assignment and no links, costs, progress, codes or user values",
+        ));
+    }
+    if assigned && all.iter().any(|t| t.parent_guid.is_some()) {
+        return Err(fail("unsupported_layout", "Projects with retained assignments must contain only flat root tasks"));
+    }
+    Ok(if assigned { SourceScope::FlatPlannedSingleAssignments } else { SourceScope::PlannedUnassigned })
 }
 fn planned_state(raw: &[u8], source: &Container, callback: &mut dyn FnMut(f32) -> bool) -> Result<(String, Vec<u8>)> {
     let section = source.sections.get("Task States").ok_or_else(|| fail("missing_dependency", "Task States definitions are required"))?;
@@ -271,9 +309,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     if evidence.tasks.len() >= 512 {
         return Err(fail("limit", "Task insertion supports at most 512 output tasks"));
     }
-    if relocation::scope(&evidence.tasks).is_some() {
-        return Err(fail("unsupported_layout", "Task insertion requires Planned tasks without assignments, links, costs, progress, codes or user values"));
-    }
+    let source_scope = scope(&evidence.tasks)?;
     if !relocation::all_lookups_valid(&data, &evidence.tasks, callback)? {
         return Err(fail("unsupported_layout", "Source collection lookups are inconsistent"));
     }
@@ -286,6 +322,14 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     for task in [template, anchor] {
         if guid_at(&data, checked_add(task.display_id_end, 9)?)? != state {
             return Err(fail("missing_dependency", "Default Work body does not reference the observed Planned task-state definition"));
+        }
+    }
+    if source_scope == SourceScope::FlatPlannedSingleAssignments {
+        for task in &evidence.tasks {
+            profile(&data, task, &evidence.tasks, callback)?;
+            if task.calendar_guid_storage != template.calendar_guid_storage || guid_at(&data, checked_add(task.display_id_end, 9)?)? != state {
+                return Err(fail("unsupported_layout", "Assigned roots must share the admitted default calendar and Planned state definition"));
+            }
         }
     }
     calendar(&calendars, template, anchor)?;
@@ -313,7 +357,11 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     let mut row = Vec::new();
     append(&mut row, bytes(&data, template.offset, 12)?)?;
     append(&mut row, &task_id)?;
-    append(&mut row, bytes(&data, checked_add(template.offset, 28)?, 45)?)?;
+    append(&mut row, bytes(&data, checked_add(template.offset, 28)?, 5)?)?;
+    append(&mut row, &[0; 4])?;
+    let assignment_bytes = template.assignments.len().checked_mul(235).ok_or_else(|| fail("limit", "Template assignment bytes"))?;
+    let assignment_end = checked_add(checked_add(template.offset, 37)?, assignment_bytes)?;
+    append(&mut row, bytes(&data, assignment_end, 36)?)?;
     append(&mut row, &name)?;
     append(&mut row, &anchor.planned_start_wallclock_scalar.to_le_bytes())?;
     append(&mut row, &DURATION.to_le_bytes())?;
@@ -362,6 +410,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
         || inserted.display_id != request.display_id
         || inserted.duration_storage_scalar != DURATION
         || inserted.calendar_guid_storage != template.calendar_guid_storage
+        || !inserted.assignments.is_empty()
         || guid_at(&updated, checked_add(inserted.display_id_end, 9)?)? != state
         || inserted.planned_start_wallclock_scalar != anchor.planned_start_wallclock_scalar
         || bytes(&updated, checked_add(inserted.name_end, 98)?, 16)? != supply_id
@@ -379,11 +428,14 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
     Ok(Candidate {
         bytes: output,
         receipt: Receipt {
-            version: 1,
+            version: 2,
             source_sha256: source_hash,
             output_sha256: output_hash,
             admitted_build: "6.5.5.28",
             insertion: request.clone(),
+            source_scope,
+            template_assignments_omitted: template.assignments.len(),
+            new_task_assignment_count: 0,
             default_profile_sha256: PROFILE,
             planned_start_wallclock_scalar: anchor.planned_start_wallclock_scalar,
             duration_storage_scalar: DURATION,
@@ -404,6 +456,7 @@ fn inner(raw: &[u8], expected: &str, request: &InsertAbove, callback: &mut dyn F
             constructor_completeness_verified: false,
             limitations: vec![
                 "One default Planned Work leaf above an existing Work leaf; Monday-Friday 09:00-17:00 default calendar only.",
+                "Unassigned Planned hierarchies or flat Planned roots retaining at most one assignment per task; template assignments are omitted from the new task.",
                 "Names and display IDs are explicit; automatic display-ID generation, task deletion and general construction are not admitted.",
                 "Only Tasks changes. Native transaction, thumbnail and presentation history are preserved rather than reproduced.",
                 "Native persistence, geometry, summary dates and full scheduling require independent acceptance.",
