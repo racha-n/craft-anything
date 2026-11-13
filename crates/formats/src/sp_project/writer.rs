@@ -222,18 +222,38 @@ pub(super) fn pack_tasks(
     changed: bool,
     callback: &mut dyn FnMut(f32) -> bool,
 ) -> Result<(Vec<u8>, String, Vec<SectionGuard>)> {
-    let section = evidence.sections.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?;
-    let prefix = bytes(raw, section.file_offset, 7)?;
-    marker(prefix, 0, b"\x01\x05Tasks")?;
-    // The no-edit control must be byte-identical, even if the source compressor differs.
-    let compressed = if !changed {
-        bytes(raw, checked_add(section.file_offset, 7)?, section.stored_bytes.checked_sub(7).ok_or_else(|| fail("truncated", "Tasks prefix"))?)?.to_vec()
-    } else {
-        miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
-    };
+    // No-edit controls preserve the source compressor's exact bytes.
+    let replacements = if changed { vec![("Tasks", data)] } else { Vec::new() };
+    pack_sections(raw, evidence, &replacements, callback)
+}
+
+/// Repack an explicitly bounded set of decoded sections, preserving other stored bytes.
+pub(super) fn pack_sections(
+    raw: &[u8],
+    evidence: &Evidence,
+    replacements: &[(&str, &[u8])],
+    callback: &mut dyn FnMut(f32) -> bool,
+) -> Result<(Vec<u8>, String, Vec<SectionGuard>)> {
+    if replacements.len() > 2 {
+        return Err(fail("limit", "At most two section replacements are admitted"));
+    }
+    let mut encoded = BTreeMap::new();
+    let mut output_size = raw.len();
+    for (name, data) in replacements {
+        if !matches!(*name, "Tasks" | "PresentationData") || data.len() > STREAM_LIMIT || encoded.contains_key(*name) {
+            return Err(fail("unsupported_layout", "Invalid or oversized section replacement"));
+        }
+        let section = evidence.sections.get(*name).ok_or_else(|| fail("missing_dependency", "Replacement section missing"))?;
+        let prefix_len = checked_add(name.len(), 2)?;
+        let mut prefix = vec![1, u8::try_from(name.len()).map_err(|_| fail("limit", "Section name length"))?];
+        prefix.extend_from_slice(name.as_bytes());
+        marker(raw, section.file_offset, &prefix)?;
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+        let new_stored = checked_add(prefix_len, compressed.len())?;
+        output_size = checked_add(output_size.checked_sub(section.stored_bytes).ok_or_else(|| fail("limit", "Section size"))?, new_stored)?;
+        encoded.insert(*name, (prefix, compressed));
+    }
     check(callback, 0.5)?;
-    let new_stored = checked_add(prefix.len(), compressed.len())?;
-    let output_size = checked_add(raw.len().checked_sub(section.stored_bytes).ok_or_else(|| fail("limit", "Section size"))?, new_stored)?;
     if output_size > FILE_LIMIT {
         return Err(fail("limit", "Candidate exceeds the 256 MiB file cap"));
     }
@@ -248,9 +268,12 @@ pub(super) fn pack_tasks(
         let end = if index == 47 { raw.len() } else { usize::try_from(u64_at(raw, checked_add(slot, 48)?)?).map_err(|_| fail("limit", "Section end"))? };
         let offset = u64::try_from(output.len()).map_err(|_| fail("limit", "Output offset"))?.to_le_bytes();
         output.get_mut(slot..checked_add(slot, 8)?).ok_or_else(|| fail("truncated", "Directory write range"))?.copy_from_slice(&offset);
-        if start == section.file_offset {
+        let field = bytes(raw, slot.checked_sub(40).ok_or_else(|| fail("limit", "Section name slot"))?, 40)?;
+        let name_end = field.iter().position(|b| *b == 0).ok_or_else(|| fail("invalid_directory", "Section name terminator"))?;
+        let name = std::str::from_utf8(bytes(field, 0, name_end)?).map_err(|_| fail("invalid_directory", "Section name encoding"))?;
+        if let Some((prefix, compressed)) = encoded.get(name) {
             output.extend_from_slice(prefix);
-            output.extend_from_slice(&compressed);
+            output.extend_from_slice(compressed);
         } else {
             output.extend_from_slice(bytes(raw, start, end.checked_sub(start).ok_or_else(|| fail("limit", "Section length"))?)?);
         }
@@ -265,7 +288,7 @@ pub(super) fn pack_tasks(
         let old_bytes = bytes(raw, old.file_offset, old.stored_bytes)?;
         let new_bytes = bytes(&output, new.file_offset, new.stored_bytes)?;
         let preserved = old_bytes == new_bytes;
-        if name != "Tasks" && !preserved {
+        if !encoded.contains_key(name.as_str()) && !preserved {
             return Err(fail("invalid_output", "An untouched section changed"));
         }
         guards.push(SectionGuard {

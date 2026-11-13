@@ -347,8 +347,23 @@ also removes the surviving successor's link. Presentation projections match thre
 single-selection controls, including cleanup of the removed assignment identity.
 Multiple selection remains unadmitted. Geometry retains two mesh instances and
 one definition after assignment deletion. Five native images are inspected and
-all 57 protected hashes stay unchanged. No production deletion codec or UI exists
-yet. See [the evidence and candidate boundary](sp-task-deletion-controls.md).
+all 57 protected hashes stay unchanged. Standalone candidate coverage follows
+below; draft/UI and generic deletion remain pending.
+See [the evidence and candidate boundary](sp-task-deletion-controls.md).
+
+### Guarded deletion candidates (R3.14)
+
+A separate headless tool removes one unassigned Planned root leaf, validates its
+GUID/display ID/position, rebuilds lookup vectors and cleans matching presentation
+rows/selection. Unknown references and broader layouts are rejected. All twelve
+frozen checks pass with 2,553 target tests (19 ignored), including six format
+and one engine focused cases. Two current CLI deletion files pass 492 native
+General comparisons and exact Tasks through save/unload/reopen. The first-row case
+exercises lookup `[1, 2, 0]`; five earlier creation SP/receipt identities and all 57
+protected hashes remain unchanged. Thirteen refusal calls and two inspected native
+images pass. The CLI is rebuilt; desktop/viewer are reused. Generic deletion,
+native Save and draft/UI deletion remain pending.
+See [the receipt and acceptance contract](sp-task-deletion-controls.md#standalone-candidate-acceptance).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

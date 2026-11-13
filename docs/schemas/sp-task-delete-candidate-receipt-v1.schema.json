@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Experimental unassigned root-leaf deletion receipt version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "source_sha256",
+    "output_sha256",
+    "admitted_build",
+    "deletion",
+    "removed_supply_chain_id",
+    "task_count_before",
+    "task_count_after",
+    "sections",
+    "internal_reparse_passed",
+    "surviving_task_bodies_preserved",
+    "collection_lookups_rebuilt",
+    "presentation_rows_validated",
+    "task_selection_cleared",
+    "reference_sections_checked",
+    "removed_identity_references_absent",
+    "native_reopen_verified",
+    "native_row_identity_verified",
+    "derived_schedule_recalculated",
+    "native_transaction_history_reproduced",
+    "limitations"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "output_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "admitted_build": {
+      "const": "6.5.5.28"
+    },
+    "deletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_guid",
+        "expected_parent_guid",
+        "expected_sibling_index",
+        "expected_display_id"
+      ],
+      "properties": {
+        "task_guid": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "expected_parent_guid": {
+          "type": "null"
+        },
+        "expected_sibling_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 510
+        },
+        "expected_display_id": {
+          "type": "string"
+        }
+      }
+    },
+    "removed_supply_chain_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "task_count_before": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 511
+    },
+    "task_count_after": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 510
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 48,
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source_stored_sha256",
+          "output_stored_sha256",
+          "stored_bytes_preserved"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source_stored_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "output_stored_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "stored_bytes_preserved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "internal_reparse_passed": {
+      "const": true
+    },
+    "surviving_task_bodies_preserved": {
+      "const": true
+    },
+    "collection_lookups_rebuilt": {
+      "const": true
+    },
+    "presentation_rows_validated": {
+      "const": true
+    },
+    "task_selection_cleared": {
+      "type": "boolean"
+    },
+    "reference_sections_checked": {
+      "const": 48
+    },
+    "removed_identity_references_absent": {
+      "const": true
+    },
+    "native_reopen_verified": {
+      "const": false
+    },
+    "native_row_identity_verified": {
+      "const": false
+    },
+    "derived_schedule_recalculated": {
+      "const": false
+    },
+    "native_transaction_history_reproduced": {
+      "const": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

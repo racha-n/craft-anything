@@ -3,6 +3,7 @@
 mod actual_expenses;
 pub mod creation;
 mod definitions;
+pub mod deletion;
 pub mod draft;
 pub mod hierarchy;
 pub mod mixed;

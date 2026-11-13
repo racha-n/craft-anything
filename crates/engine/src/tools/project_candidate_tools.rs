@@ -10,7 +10,7 @@ use crate::{
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
-use craft_anything_formats::sp_project::{creation, hierarchy, mixed, ordered, relocation, structured};
+use craft_anything_formats::sp_project::{creation, deletion, hierarchy, mixed, ordered, relocation, structured};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -72,6 +72,15 @@ struct CreationRequest {
     output_path: String,
     acknowledge_storage_only: bool,
     insertion: creation::InsertAbove,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeletionRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    deletion: deletion::DeleteLeaf,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -190,6 +199,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<CreationRequest>,
             run_creation,
+        ),
+        spec(
+            "formats_project_sp_task_delete_candidate_write",
+            "Write an experimental task deletion candidate",
+            "Remove one unassigned Planned root leaf from a flat default-Work project with at least two tasks. Bind source hash, task identity, display ID and position; rebuild collection lookups and validated presentation row/selection state. Reject associated tasks, links, multi-selection and unknown references. Publish separate no-clobber SP/receipt files; native saving and scheduling remain independent gates.",
+            "Export a separate test copy with one supported task removed, then validate the remaining rows in the source application.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<DeletionRequest>,
+            run_deletion,
         ),
     ]
 }
@@ -387,6 +407,42 @@ fn run_creation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolErro
     Ok(ToolOutput::evidence(evidence))
 }
 
+fn run_deletion(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: DeletionRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = deletion::candidate(&input.bytes, &p.expected_source_sha256, &p.deletion, |progress| {
+        ctx.report(Some(progress), "Preparing experimental task deletion candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted unassigned root-leaf deletion candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_task_delete_candidate_write", input.subject, params)
+        .summary("Prepared an experimental unassigned root-leaf deletion candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new("native_persistence_unverified", "Task bodies/lookups, presentation rows/selection and identity references pass internal checks. Native persistence, row identity and scheduling require separate acceptance."))
+        .limitation(Limitation::new("native_transaction_not_reproduced", "Only Tasks and validated PresentationData change; the other 46 stored sections remain exact. Native transaction/thumbnail history is not reproduced."))
+        .limitation(Limitation::new("separate_file_publication", "SP and receipt publication each refuse replacement. A receipt publication failure after SP publication retains that candidate and reports recovery instructions."))
+        .target_content(true)
+        .build()?;
+    if load_path(&p.path, 256 * 1024 * 1024)?.bytes != input.bytes {
+        return Err(ToolError::invalid("Source changed during candidate generation; reload it before exporting."));
+    }
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 pub(super) fn run_structured(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: StructuredRequest = parse_params(params.clone())?;
     if !p.acknowledge_storage_only {
@@ -493,6 +549,40 @@ pub(super) fn run_mixed(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, 
 mod tests {
     use super::*;
     use crate::{CallOptions, Caller, Engine};
+    #[test]
+    fn deletion_export_preserves_source_and_refuses_stale_guards_and_existing_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let output = dir.path().join("deleted.sp");
+        let raw = craft_anything_testkit::project_authoring::default_work_project_with_presentation(4, Some(1));
+        std::fs::write(&path, &raw).unwrap();
+        let metadata = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let target = &metadata.metadata["tasks"][1];
+        let e = Engine::new(crate::testing::session());
+        let call = |p| e.call("formats_project_sp_task_delete_candidate_write", p, CallOptions::new(Caller::Cli));
+        let mut request = json!({"path":path,"expected_source_sha256":metadata.source_sha256,"output_path":output,"acknowledge_storage_only":false,
+            "deletion":{"task_guid":target["guid"],"expected_parent_guid":null,"expected_sibling_index":1,"expected_display_id":target["display_id"]}});
+        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+        assert!(!output.exists());
+        request["acknowledge_storage_only"] = json!(true);
+        let mut stale = request.clone();
+        stale["deletion"]["expected_sibling_index"] = json!(0);
+        assert!(call(stale).is_err());
+        assert!(!output.exists());
+        let mut stale = request.clone();
+        stale["expected_source_sha256"] = json!("0".repeat(64));
+        assert!(call(stale).is_err());
+        assert!(!output.exists());
+        let value = call(request.clone()).unwrap().to_json();
+        assert_eq!(value["result"]["receipt"]["task_count_after"], 3);
+        assert_eq!(value["result"]["receipt"]["task_selection_cleared"], true);
+        let published = std::fs::read(&output).unwrap();
+        assert!(call(request).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), published);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
+        let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt, value["result"]["receipt"]);
+    }
     #[test]
     fn task_relocation_requires_acknowledgement_and_valid_source() {
         let dir = tempfile::tempdir().unwrap();

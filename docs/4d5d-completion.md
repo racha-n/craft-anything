@@ -868,6 +868,21 @@ remain unadmitted.
 Five independent native save/unload/reopen controls now establish initial leaf
 removal, presentation/selection and incoming-link cleanup boundaries. Removing an
 assigned task retains its resource and geometry but also clears the removed
-assignment's selected identity. A Tasks-only deletion is insufficient. No production
-deletion codec is admitted yet; [the control report](sp-task-deletion-controls.md)
-defines the proposed first subset and the unverified cases.
+assignment's selected identity. A Tasks-only deletion is insufficient. The following
+section records the first standalone candidate; [the control report](sp-task-deletion-controls.md)
+defines its subset and the unverified cases.
+
+## Guarded unassigned root-leaf deletion candidates
+
+`formats_project_sp_task_delete_candidate_write` writes one supported deletion to
+a separate SP file with a version-1 receipt. Source identity/position/display ID,
+all surviving bodies, rebuilt lookup vectors, presentation rows and single-task
+selection are checked. Raw and canonical string identities are scanned across the
+header and all 48 sections; unknown references are refused. Tasks and validated
+PresentationData change; the other 46 stored sections remain exact. Source bytes
+are rechecked before separate no-clobber SP/receipt publications.
+
+The [candidate contract](sp-task-deletion-controls.md#standalone-candidate-acceptance)
+records twelve frozen checks, five old creation identities, thirteen refusals and
+two actual CLI native cases with 492 General comparisons, including a three-cycle
+lookup vector. Generic deletion, native Save and draft/UI deletion remain pending.

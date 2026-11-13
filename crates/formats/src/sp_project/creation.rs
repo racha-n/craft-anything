@@ -9,6 +9,18 @@ mod admission;
 mod tests;
 pub use admission::{Anchor, Availability, Unavailable, availability};
 
+/// Shared default-body admission for the first independent deletion subset.
+pub(super) fn unassigned_roots(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> Result<(String, Vec<u8>, Evidence)> {
+    let p = admission::prepare(raw, expected, None, callback)?;
+    if p.source_scope != SourceScope::PlannedUnassigned || p.evidence.tasks.len() < 2 || p.evidence.tasks.iter().any(|t| t.parent_guid.is_some()) {
+        return Err(fail("unsupported_layout", "Deletion requires at least two unassigned Planned root leaves"));
+    }
+    for task in &p.evidence.tasks {
+        p.admit_pair(task, task, callback)?;
+    }
+    Ok((p.source_hash, p.data, p.evidence))
+}
+
 const PROFILE: &str = "616828033f90c1a0c824a4ced3f41aae005e7f65765e6ca5af791686ad5a7642";
 const DURATION: u64 = 28_800;
 

@@ -147,21 +147,61 @@ fn states() -> Vec<u8> {
 
 /// Build 1..=110 independent Planned leaves on the admitted synthetic calendar.
 pub fn default_work_project(task_count: usize) -> Vec<u8> {
+    project(task_count, None)
+}
+
+/// Original synthetic presentation rows, optionally focusing one task.
+pub fn default_work_project_with_presentation(task_count: usize, selected: Option<usize>) -> Vec<u8> {
+    project(task_count, Some(selected))
+}
+
+fn project(task_count: usize, presentation: Option<Option<usize>>) -> Vec<u8> {
     assert!((1..=110).contains(&task_count));
     let rows: Vec<_> = (1..=task_count).map(|i| record(i as u8, 1_794_214_800, 28_800)).collect();
     let tasks = section(&rows);
     let calendars = calendars();
     let states = states();
+    let mut view = Vec::new();
+    if let Some(selected) = presentation {
+        assert!(selected.is_none_or(|i| i < task_count));
+        let id = selected.map(|i| &rows[i][12..28]);
+        view.extend(id.unwrap_or(&[0; 16]));
+        view.extend([0xd0, 0xbc, 0xa1, 0x06]);
+        view.extend(u32::from(id.is_some()).to_le_bytes());
+        if let Some(id) = id {
+            view.extend(id);
+            view.extend(0u32.to_le_bytes());
+        }
+        view.extend([0x2c, 0x57, 0xd9, 0xda]);
+        view.extend(b"synthetic view prefix v1.");
+        view.extend([0xf2, 0x96, 0x1c, 0x49, 0x50, 0xd7, 0xfc, 0xfa]);
+        view.extend((task_count as u32).to_le_bytes());
+        let mut identities: Vec<_> = rows.iter().map(|r| &r[12..28]).collect();
+        identities.sort();
+        for (i, id) in identities.into_iter().enumerate() {
+            view.extend(id);
+            view.extend([0x12, 0x24, 0xb4, 0x13, 0x17, 0, 0, 0]);
+            view.extend([1, 0, 0, 0, i as u8, 1, 1]);
+            view.extend([0xae, 0xa6, 0x38, 0x8a]);
+        }
+        view.extend([0xac, 0xc1, 0x97, 0x5a, 0xf1, 0xe9, 0x13, 0x41]);
+        view.extend(b"synthetic preserved tail");
+    }
     let names = ["Tasks", "Resources", "Use Profiles", "Activity Codes", "User Fields", "Entities", "IncludeLibrary", "Calendars", "Task States"];
     let mut raw = vec![0u8; 2344];
     raw[..16].copy_from_slice(&[0xb6, 0x17, 0x67, 0x1e, 0x7a, 0xf3, 0x46, 0x40, 0xa8, 0x6e, 0xd5, 0xdc, 0x41, 0x7a, 0x2d, 0xe2]);
     raw[20..40].copy_from_slice(&text("6.5.5.28"));
     for i in 0..48 {
-        let name = names.get(i).map(|s| s.to_string()).unwrap_or_else(|| format!("Opaque{i}"));
+        let name = if i == 9 && presentation.is_some() {
+            "PresentationData".to_owned()
+        } else {
+            names.get(i).map(|s| s.to_string()).unwrap_or_else(|| format!("Opaque{i}"))
+        };
         let data = match name.as_str() {
             "Tasks" => tasks.clone(),
             "Calendars" => calendars.clone(),
             "Task States" => states.clone(),
+            "PresentationData" => view.clone(),
             _ => empty_section(),
         };
         let offset = raw.len() as u64;

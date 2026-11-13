@@ -997,6 +997,15 @@ validate presentation changes independently, and test incoming links in survivin
 tasks. Selecting a target before deletion can itself change a multi-selection
 source; do not attribute that whole presentation delta solely to deletion.
 
+**Synthetic padding can collide with a synthetic identity.** A presentation fixture
+used repeated filler bytes that matched one generated Supply Chain GUID. The
+reference guard correctly refused that fixture. Use filler distinct from fixture
+identities and retain an explicit unknown-Supply-Chain-reference regression.
+
+**PowerShell passes wildcard paths literally to native searches.** Give `rg` an
+existing directory and a `-g` filename filter, or find the path with `rg --files`;
+an argument such as `area/*.rs` can be treated as a nonexistent literal path.
+
 **A process search that found itself.** Looking for a helper by a word in its command line, with
 that word in the search's own command, listed the search: "a helper is left behind" after every
 run, with a new pid each time. The new pid was the clue. Build the pattern from parts
