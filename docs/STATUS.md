@@ -147,6 +147,25 @@ clippy, layers, locks, secrets, tools, doctests and formatting. The full UI suit
 serially after an unrelated chat smoke selector missed once in the parallel run;
 that exact smoke test also passed on retry. The initial miss remains unexplained.
 
+### Guarded task hierarchy candidates (R3.14)
+
+A headless source-bound subtree reparent writer and engine tool are available experimentally.
+The subset is at most 512 Planned unassigned/unassociated tasks. Source parent/position,
+destination position, cycle/depth, canonical child framing and collection lookup indices
+are guarded. GUIDs/body fields and all other sections are preserved; child collections
+and lookup vectors are rebuilt. The version-1 receipt keeps native and recalculation
+flags false. CLI indent/outdent/inverse cases matched independent native Tasks, passed
+the receipt schema and refused replacement. Both native candidates passed Save/unload/
+reopen and complete observed General comparisons for all three tasks before and after,
+including parent summary dates. Both screenshots were inspected; candidate/receipt
+bytes and all 57 protected sources stayed unchanged.
+
+Main/CLI builds and 2,502 formats/engine target tests passed (19 ignored). After a
+test-only fixture borrow lint fix, the current eight focused regressions, all-target
+clippy, layers, locks, secrets, tools, wasm, doctests and formatting passed; production
+source stayed identical to the full run. Initial lint output and reused unaffected
+checks are retained. Shared draft and Plan integration remain separate pending work.
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,

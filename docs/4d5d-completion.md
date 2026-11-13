@@ -387,6 +387,38 @@ complete descendant subtrees; the original opaque-tail preservation claim above 
 superseded by the lookup correction. Stale identity/position, cancellation,
 linked tasks and valid sources exceeding the 512-task budget are refused.
 
+## Existing-task hierarchy candidates
+
+Hierarchy authoring has a separate experimental tool,
+`formats_project_sp_task_hierarchy_candidate_write`.
+It moves an existing subtree to a different parent (or the root collection), with
+source hash, GUID, expected parent and expected sibling position guards. The destination
+position is measured after removing the subtree. Same-parent requests use the existing
+order tool. Self/descendant destinations, excessive depth, invalid lookup vectors and
+noncanonical empty child frames are refused. The subset remains at most 512 Planned
+tasks without assignments, links, costs, progress, codes or user values.
+
+Task GUIDs and body fields stay exact; child flags/frames/counts and collection lookup
+vectors are rebuilt within the 16 MiB Tasks cap and 64-level depth limit. Reparse checks
+every parent/order, all GUIDs and each task's body segments; other section payloads stay
+unchanged. The version-1 hierarchy receipt has its own schema. Stored dates/durations
+stay unchanged, and native persistence, summary dates and schedule coordination remain
+separate gates. This tool is not yet integrated into shared draft history or Plan forms.
+
+CLI indent, outdent and inverse candidates matched independent native Tasks, preserved
+all 47 other sections, passed their receipt schema and refused replacement. Both native
+indent/outdent candidates passed Save/unload/reopen with all three tasks' complete
+observed General dictionaries equal to the independent controls before and after,
+including derived parent summary dates. Task bytes, candidate/receipt hashes and 57
+protected source hashes stayed unchanged; both native screenshots were inspected.
+
+Main/CLI builds and 2,502 formats/engine target tests passed (19 ignored). A test-only
+clone-to-borrow lint fix left production source unchanged; all eight current hierarchy
+regressions and all-target clippy then passed, followed by layers, locks, secrets, tools,
+wasm, doctests and formatting. The initial lint failure and carried-forward build/full
+test evidence are retained. These native controls establish their observed cases;
+generic native-save and derived-schedule flags remain false.
+
 ## Shared field and task-order drafts
 
 The ordered draft pipeline extends existing scalar/text history with at most eight

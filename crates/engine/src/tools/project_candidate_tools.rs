@@ -10,7 +10,7 @@ use crate::{
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
-use craft_anything_formats::sp_project::{mixed, ordered, relocation};
+use craft_anything_formats::sp_project::{hierarchy, mixed, ordered, relocation};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,6 +54,15 @@ struct RelocationRequest {
     output_path: String,
     acknowledge_storage_only: bool,
     relocation: relocation::Move,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct HierarchyRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    relocation: hierarchy::Reparent,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +134,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<OrderedRequest>,
             run_ordered,
+        ),
+        spec(
+            "formats_project_sp_task_hierarchy_candidate_write",
+            "Write an experimental task hierarchy candidate",
+            "Move an existing Planned unassigned task subtree to a different parent in a source-bound project of at most 512 tasks. Guard source parent and position, refuse cycles/depth overflow, preserve task body fields and other sections, and rebuild child collections and GUID lookup indices. Publish a separate candidate and version-1 receipt without replacement; native saving and summary/schedule recalculation remain unverified.",
+            "Create a separate test copy with a changed task parent. Validate its hierarchy and dates in the source application before relying on it.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<HierarchyRequest>,
+            run_hierarchy,
         ),
     ]
 }
@@ -256,6 +276,40 @@ fn run_relocation(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolEr
     Ok(ToolOutput::evidence(evidence))
 }
 
+fn run_hierarchy(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: HierarchyRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = hierarchy::candidate(&input.bytes, &p.expected_source_sha256, &p.relocation, |progress| {
+        ctx.report(Some(progress), "Preparing experimental task hierarchy candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted task hierarchy candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_task_hierarchy_candidate_write", input.subject, params)
+        .summary("Prepared an experimental task hierarchy candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new(
+            "native_persistence_unverified",
+            "Task identity/body fields and lookup indices passed internal validation. Native persistence, summary dates and schedule coordination remain unverified.",
+        ))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 pub(super) fn run_ordered(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     let p: OrderedRequest = parse_params(params.clone())?;
     if !p.acknowledge_storage_only {
@@ -338,6 +392,22 @@ mod tests {
             "relocation":{"task_guid":"11111111-1111-1111-1111-111111111111","expected_parent_guid":null,
                 "expected_sibling_index":0,"sibling_index":0}});
         let call = |params| engine.call("formats_project_sp_task_order_candidate_write", params, CallOptions::new(Caller::Cli));
+        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+        request["acknowledge_storage_only"] = json!(true);
+        assert!(call(request).is_err());
+        assert!(!output.exists());
+        assert!(!output.with_extension("sp.receipt.json").exists());
+    }
+    #[test]
+    fn hierarchy_requires_acknowledgement_and_valid_source_without_publishing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("hierarchy.sp");
+        let engine = Engine::new(crate::testing::session());
+        let mut request = json!({"path":dir.path().join("absent.sp"),"expected_source_sha256":"0".repeat(64),
+            "output_path":output,"acknowledge_storage_only":false,
+            "relocation":{"task_guid":"11111111-1111-1111-1111-111111111111","expected_parent_guid":null,
+                "expected_sibling_index":0,"parent_guid":"22222222-2222-2222-2222-222222222222","sibling_index":0}});
+        let call = |params| engine.call("formats_project_sp_task_hierarchy_candidate_write", params, CallOptions::new(Caller::Cli));
         assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
         request["acknowledge_storage_only"] = json!(true);
         assert!(call(request).is_err());

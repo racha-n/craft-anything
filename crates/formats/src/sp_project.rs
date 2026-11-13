@@ -3,6 +3,7 @@
 mod actual_expenses;
 mod definitions;
 pub mod draft;
+pub mod hierarchy;
 pub mod mixed;
 pub mod ordered;
 pub mod relocation;

@@ -69,7 +69,7 @@ pub struct Outline {
     pub reason: Option<ScopeReason>,
     pub positions: Vec<Position>,
 }
-fn scope(tasks: &[Task]) -> Option<ScopeReason> {
+pub(super) fn scope(tasks: &[Task]) -> Option<ScopeReason> {
     if tasks.is_empty() {
         return Some(ScopeReason::NoTasks);
     }
@@ -90,7 +90,7 @@ fn scope(tasks: &[Task]) -> Option<ScopeReason> {
         })
         .then_some(ScopeReason::AssociatedOrProgressedTasks)
 }
-fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> Result<(String, Container)> {
+pub(super) fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> Result<(String, Container)> {
     if raw.len() > FILE_LIMIT || expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(fail("invalid_identity", "Choose a source up to 256 MiB and its 64-digit SHA-256"));
     }
@@ -102,7 +102,7 @@ fn source(raw: &[u8], expected: &str, callback: &mut dyn FnMut(f32) -> bool) -> 
 }
 // The collection interleaves each task body with one entry of its GUID-sorted
 // lookup vector. An entry belongs to its collection slot, not to that task.
-fn lookup_indices(data: &[u8], siblings: &[&Task]) -> Result<Vec<u32>> {
+pub(super) fn lookup_indices(data: &[u8], siblings: &[&Task]) -> Result<Vec<u32>> {
     let mut keys = Vec::new();
     for (index, task) in siblings.iter().enumerate() {
         let key = bytes(data, checked_add(task.offset, 12)?, 16)?;
@@ -121,7 +121,7 @@ fn lookup_valid(data: &[u8], siblings: &[&Task]) -> Result<bool> {
     }
     Ok(true)
 }
-fn all_lookups_valid(data: &[u8], tasks: &[Task]) -> Result<bool> {
+pub(super) fn all_lookups_valid(data: &[u8], tasks: &[Task]) -> Result<bool> {
     let mut groups: BTreeMap<Option<&str>, Vec<&Task>> = BTreeMap::new();
     for task in tasks {
         groups.entry(task.parent_guid.as_deref()).or_default().push(task);
