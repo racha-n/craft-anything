@@ -2497,6 +2497,7 @@ Owner: open · Status: in progress (experimental 3D/4D/5D available; parity expa
       - [x] Validate an explicit Gregorian scheduler anchor with FS/lag 0 and FS/lag 2d on the observed Project Calendar; retain the localized default-year anomaly separately. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
       - [ ] Validate remaining link kinds, negative-lag scheduling, calendar overrides, constraints and task kinds before general rescheduling admission.
       - [x] Add a bounded, explicitly declared FS earliest-date preview through the shared analysis/engine tools, without mutating source projects or claiming native scheduler parity. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
+      - [ ] Add a source-bound existing-task relocation candidate with guarded parent/order identity, bounded subtree preservation and independent indent/outdent/reorder controls; keep native saving and schedule coordination separate. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
 - [ ] Add resource creation, assignment editing, resource wizard and appearance-profile editing before enabling their grey Resources commands.
 - [ ] Add model import/export and persistent transform/material editing before enabling the grey 3D editing commands.
 - [x] Add camera/focus keyframes, a shared headless renderer and guarded video export before enabling the grey 4D presentation commands. -- claimed: Codex, branch `feature/r3.14-scene-bundle-viewport`
