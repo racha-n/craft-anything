@@ -184,3 +184,45 @@ through the shared engine, recovery after a second client changes revision, cand
 publication and unchanged source bytes. Offscreen Studio/Planning images were inspected;
 title contrast and scroll clipping were corrected. This validates the experimental scalar
 interface, not general authoring, desktop interaction parity or native Save admission.
+
+## Task text storage candidates
+
+A separate experimental headless tool, `formats_project_sp_task_text_candidate_write`,
+changes task names and display IDs. Each transaction binds the source SHA-256, task GUID
+and expected text. It accepts at most 256 distinct fields and 16,384 UTF-16 code units
+per value, rejects NUL, and supports the observed short and extended length encodings.
+Edits use original decoded offsets, so multiple changes can grow or shrink together.
+Unchanged values preserve their original encoding; an unchanged Tasks payload preserves
+its original compressed bytes. Every other stored section must remain byte-identical.
+
+The candidate is reparsed and requested text is checked again by task identity before
+publication. New SP and versioned text-receipt paths use the existing no-clobber publisher.
+The scalar receipt contract is unchanged. Receipts retain `native_reopen_verified: false`;
+independent native controls and round-trip results belong to validation evidence. This
+is not task creation/deletion, hierarchy editing, Display ID uniqueness enforcement,
+external-reference rewriting or scheduling, and it does not enable general Save.
+
+The separate [text receipt version-1 schema](schemas/sp-task-text-candidate-receipt-v1.schema.json)
+defines original decoded offsets, encoded lengths and expected/output text. It does not
+change the scalar receipt schema. Consumers select the schema by the producing tool and
+must reject unsupported versions. Version 1 is the first text format; a future incompatible
+version must provide an explicit migration or regenerate the receipt from the unchanged,
+hash-bound source. Migration must never turn external fixture results into a native-proof
+flag on a newly generated candidate.
+
+Four minimal native controls cover Unicode, a 342-code-unit name, an empty second-task
+name and a Unicode display ID. Candidate Tasks matched the independent native-edited
+controls exactly, and remained identical after native Save/unload/reopen. UI General
+values and latest-reader task pages also matched. These are metadata-only controls with
+no drawable meshes; the geometry opener correctly refuses them.
+
+A separate assigned-task control changed both name and ID on a drawable project. Its
+candidate matched independent native UI editing in decoded Tasks, survived native Save/
+reopen, and retained equal task pages, geometry inventories and protected geometry/
+resource/calendar/profile payloads. The inspected focused native image shows both mesh
+instances. This covers one Planned Material singleton, not general project authoring.
+
+Frozen-source validation passed CLI/check-tool builds, 2,476 formats/engine target tests
+(19 ignored), all-target clippy, layers, locks, secrets, tools, wasm, doctests and formatting.
+All nine generated text receipts passed schema validation. Original/native source hashes
+were retained; private fixtures and native automation are not part of the public sources.

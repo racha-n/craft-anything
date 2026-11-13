@@ -7,9 +7,19 @@ local paths. Use a named cache path or `CARGO_INCREMENTAL=0`; preserve any recov
 cache under an ignored directory, verify its resolved path before moving it, and rerun
 the secret scan. Do not rebuild an executable while a check is still running it.
 
+**A PowerShell pipe replaced non-ASCII test literals with question marks.** The resulting test
+passed while exercising ASCII. Write Rust Unicode escapes through ASCII-only shell input,
+or use a verified UTF-8 transport; inspect stored code points before calling Unicode coverage
+complete. Re-run the frozen-source validation after correcting a garbled fixture.
+
 Mistakes made while building this project, what they cost, and the rule that prevents each one.
 Read this before your first change; add to it when you make a new mistake worth not repeating.
 Keep entries short: what happened, then the rule.
+
+**Preserved empty geometry sections did not prove geometry parity.** Minimal task-text controls
+had no drawable mesh instances, so the full scene opener correctly refused them. Validate their
+task metadata without weakening geometry admission, and add a separate geometry-bearing native
+control before claiming that a writer preserves a drawable project.
 
 **A native-reopened scalar patch was not equivalent to native editing.** Patching an assignment's
 planned quantity from 5 to 7.5 reopened as 7.50, while its utilization rate stayed at 1.67 units/day.

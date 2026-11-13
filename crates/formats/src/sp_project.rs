@@ -7,6 +7,7 @@ mod resource_tree;
 mod scene_geometry;
 mod scene_graph;
 mod scene_io;
+pub mod task_strings;
 pub mod writer;
 use crate::{FormatError, scene_bundle};
 use serde::Serialize;
@@ -156,6 +157,10 @@ struct Task {
     parent_guid: Option<String>,
     name: String,
     display_id: String,
+    #[serde(skip)]
+    display_id_offset: usize,
+    #[serde(skip)]
+    display_id_end: usize,
     name_offset: usize,
     name_end: usize,
     planned_start_wallclock_scalar: u64,
@@ -422,6 +427,8 @@ impl TaskReader<'_, '_> {
             parent_guid: parent.map(str::to_owned),
             name,
             display_id,
+            display_id_offset: id_at,
+            display_id_end: id_end,
             name_offset,
             name_end,
             planned_start_wallclock_scalar,
@@ -1086,6 +1093,59 @@ mod tests {
         assert_eq!(imported.metadata["source_sha256"], imported.source_sha256);
         assert_eq!(imported.metadata["coverage"]["assignment_resource_refs_checked"], true);
         assert!(parse_metadata(&raw, |_| false).is_err());
+    }
+    #[test]
+    fn task_text_candidates_preserve_source_and_opaque_sections() {
+        use task_strings::{TextEdit, candidate};
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let hash = parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let id = "11111111-1111-1111-1111-111111111111".to_owned();
+        for name in [String::new(), "\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}".into(), "x".repeat(254), "x".repeat(255), "x".repeat(16384)] {
+            let edits = [
+                TextEdit::TaskName { task_guid: id.clone(), expected: "A".into(), value: name.clone() },
+                TextEdit::TaskDisplayId { task_guid: id.clone(), expected: "1".into(), value: "TASK_\u{03b1}_001".into() },
+            ];
+            let result = candidate(&raw, &hash, &edits, |_| true).unwrap();
+            let parsed = parse_metadata(&result.bytes, |_| true).unwrap();
+            assert_eq!(parsed.metadata["tasks"][0]["name"], name);
+            assert_eq!(parsed.metadata["tasks"][0]["display_id"], "TASK_\u{03b1}_001");
+            assert_eq!(result.receipt.sections.iter().filter(|s| s.name != "Tasks" && s.stored_bytes_preserved).count(), 47);
+            assert!(!result.receipt.native_reopen_verified);
+            let original = parse_metadata(&raw, |_| true).unwrap();
+            assert_eq!(original.metadata["tasks"][0]["name"], "A");
+            let restored = candidate(
+                &result.bytes,
+                &result.receipt.output_sha256,
+                &[
+                    TextEdit::TaskName { task_guid: id.clone(), expected: name, value: "A".into() },
+                    TextEdit::TaskDisplayId { task_guid: id.clone(), expected: "TASK_\u{03b1}_001".into(), value: "1".into() },
+                ],
+                |_| true,
+            )
+            .unwrap();
+            let before = container(&raw, &mut |_| true).unwrap();
+            let after = container(&restored.bytes, &mut |_| true).unwrap();
+            assert_eq!(before.decoded, after.decoded);
+        }
+        assert_eq!(candidate(&raw, &hash, &[], |_| true).unwrap().bytes, raw);
+        let noop = TextEdit::TaskName { task_guid: id, expected: "A".into(), value: "A".into() };
+        assert_eq!(candidate(&raw, &hash, &[noop], |_| true).unwrap().bytes, raw);
+    }
+    #[test]
+    fn task_text_candidates_reject_stale_duplicate_and_unbounded_requests() {
+        use task_strings::{TextEdit, candidate};
+        let raw = project_with_tasks(empty_section(), metadata_task_section(false));
+        let hash = parse_metadata(&raw, |_| true).unwrap().source_sha256;
+        let edit =
+            |expected: &str, value: String| TextEdit::TaskName { task_guid: "11111111-1111-1111-1111-111111111111".into(), expected: expected.into(), value };
+        let valid = edit("A", "B".into());
+        assert!(candidate(&raw, &hash, &[edit("stale", "B".into())], |_| true).is_err());
+        assert!(candidate(&raw, &hash, &[edit("A", "x".repeat(16385))], |_| true).is_err());
+        assert!(candidate(&raw, &hash, &[edit("A", "bad\0text".into())], |_| true).is_err());
+        assert!(candidate(&raw, &hash, &[valid.clone(), valid.clone()], |_| true).is_err());
+        assert!(candidate(&raw, &hash, &vec![valid.clone(); 257], |_| true).is_err());
+        assert!(candidate(&raw, &"0".repeat(64), std::slice::from_ref(&valid), |_| true).is_err());
+        assert!(candidate(&raw, &hash, &[valid], |_| false).is_err());
     }
     #[test]
     fn scalar_candidate_changes_only_requested_task_bytes() {

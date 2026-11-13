@@ -72,7 +72,7 @@ pub struct Candidate {
     pub bytes: Vec<u8>,
     pub receipt: Receipt,
 }
-fn hash(data: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<String> {
+pub(super) fn hash(data: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<String> {
     let mut h = Sha256::new();
     for block in data.chunks(65_536) {
         check(callback, 0.1)?;
@@ -80,7 +80,7 @@ fn hash(data: &[u8], callback: &mut dyn FnMut(f32) -> bool) -> Result<String> {
     }
     Ok(format!("{:x}", h.finalize()))
 }
-fn task_for<'a>(all: &'a [Task], id: &str) -> Result<&'a Task> {
+pub(super) fn task_for<'a>(all: &'a [Task], id: &str) -> Result<&'a Task> {
     if id.len() != 36 {
         return Err(fail("invalid_identity", "Choose a source task GUID"));
     }
@@ -190,14 +190,46 @@ fn inner(raw: &[u8], expected: &str, edits: &[ScalarEdit], callback: &mut dyn Fn
         data.get_mut(change.decoded_tasks_offset..end).ok_or_else(|| fail("truncated", "Scalar range disappeared"))?.copy_from_slice(&value);
     }
     check(callback, 0.4)?;
+    let (output, output_hash, guards) = pack_tasks(raw, &data, &evidence, !edits.is_empty(), callback)?;
+    Ok(Candidate {
+        bytes: output,
+        receipt: Receipt {
+            version: 1,
+            source_sha256: source_hash,
+            output_sha256: output_hash,
+            admitted_build: "6.5.5.28",
+            changes,
+            sections: guards,
+            internal_reparse_passed: true,
+            native_reopen_verified: false,
+            derived_schedule_consistency_verified: false,
+            limitations: vec![
+                "Candidate storage edits only; source-application open/save/reopen is not certified.",
+                "Task start/duration edits do not recalculate dependent dates, resource assignments, summaries or constraints.",
+                "Quantity and utilization-rate storage are independent guarded fields; no automatic native quantity/duration/rate coordination is certified.",
+                "No currency/unit conversion, dependency rescheduling, record creation/deletion or general SP writing is admitted.",
+                "Opaque section payloads are retained byte-for-byte, not semantically validated.",
+            ],
+        },
+    })
+}
+
+/// Repack only Tasks and verify every other stored payload before a full reparse.
+pub(super) fn pack_tasks(
+    raw: &[u8],
+    data: &[u8],
+    evidence: &Evidence,
+    changed: bool,
+    callback: &mut dyn FnMut(f32) -> bool,
+) -> Result<(Vec<u8>, String, Vec<SectionGuard>)> {
     let section = evidence.sections.get("Tasks").ok_or_else(|| fail("missing_dependency", "Tasks section missing"))?;
     let prefix = bytes(raw, section.file_offset, 7)?;
     marker(prefix, 0, b"\x01\x05Tasks")?;
     // The no-edit control must be byte-identical, even if the source compressor differs.
-    let compressed = if edits.is_empty() {
+    let compressed = if !changed {
         bytes(raw, checked_add(section.file_offset, 7)?, section.stored_bytes.checked_sub(7).ok_or_else(|| fail("truncated", "Tasks prefix"))?)?.to_vec()
     } else {
-        miniz_oxide::deflate::compress_to_vec_zlib(&data, 6)
+        miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
     };
     check(callback, 0.5)?;
     let new_stored = checked_add(prefix.len(), compressed.len())?;
@@ -246,25 +278,5 @@ fn inner(raw: &[u8], expected: &str, edits: &[ScalarEdit], callback: &mut dyn Fn
     let output_hash = hash(&output, callback)?;
     let _ = inspect_container(after, output_hash.clone(), false, callback)?;
     check(callback, 1.)?;
-    Ok(Candidate {
-        bytes: output,
-        receipt: Receipt {
-            version: 1,
-            source_sha256: source_hash,
-            output_sha256: output_hash,
-            admitted_build: "6.5.5.28",
-            changes,
-            sections: guards,
-            internal_reparse_passed: true,
-            native_reopen_verified: false,
-            derived_schedule_consistency_verified: false,
-            limitations: vec![
-                "Candidate storage edits only; source-application open/save/reopen is not certified.",
-                "Task start/duration edits do not recalculate dependent dates, resource assignments, summaries or constraints.",
-                "Quantity and utilization-rate storage are independent guarded fields; no automatic native quantity/duration/rate coordination is certified.",
-                "No currency/unit conversion, dependency rescheduling, record creation/deletion or general SP writing is admitted.",
-                "Opaque section payloads are retained byte-for-byte, not semantically validated.",
-            ],
-        },
-    })
+    Ok((output, output_hash, guards))
 }

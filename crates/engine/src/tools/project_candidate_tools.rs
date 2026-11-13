@@ -8,6 +8,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
+use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -23,18 +24,40 @@ struct Request {
     acknowledge_storage_only: bool,
     edits: Vec<ScalarEdit>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TextRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    edits: Vec<TextEdit>,
+}
 pub fn specs() -> Vec<ToolSpec> {
-    vec![spec(
-        "formats_project_sp_candidate_write",
-        "Write an experimental SP candidate",
-        "Patch up to 256 guarded scalar storage fields in an admitted project copy, or publish a byte-identical no-edit control. Preserve all other section payloads and publish new SP/receipt files without replacement. Does not certify native reopen, dependent-date consistency or rescheduling.",
-        "Create a test copy for independent native validation. Schedule and cost authoring are not certified.",
-        Toolset::Formats,
-        Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
-        Requires::Nothing,
-        schema_of::<Request>,
-        run,
-    )]
+    vec![
+        spec(
+            "formats_project_sp_candidate_write",
+            "Write an experimental SP candidate",
+            "Patch up to 256 guarded scalar storage fields in an admitted project copy, or publish a byte-identical no-edit control. Preserve all other section payloads and publish new SP/receipt files without replacement. Does not certify native reopen, dependent-date consistency or rescheduling.",
+            "Create a test copy for independent native validation. Schedule and cost authoring are not certified.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<Request>,
+            run,
+        ),
+        spec(
+            "formats_project_sp_task_text_candidate_write",
+            "Write an experimental SP task text candidate",
+            "Change up to 256 source-hash, task-GUID and expected-text guarded task names or display IDs. Preserve other section payloads and publish new candidate and receipt files without replacement. Native compatibility remains a separate validation gate.",
+            "Create a separate test copy with changed task labels. Validate the copy in the source application before relying on it.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<TextRequest>,
+            run_text,
+        ),
+    ]
 }
 fn output_paths(output: &str) -> Result<(PathBuf, PathBuf), ToolError> {
     let path = PathBuf::from(output);
@@ -99,6 +122,37 @@ pub(super) fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolEr
     Ok(ToolOutput::evidence(evidence))
 }
 
+fn run_text(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: TextRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = task_strings::candidate(&input.bytes, &p.expected_source_sha256, &p.edits, |progress| {
+        ctx.report(Some(progress), "Preparing experimental SP task text candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted task-text candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_task_text_candidate_write", input.subject, params)
+        .summary("Prepared an experimental SP task text candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new("native_persistence_unverified", "Internal reparse passed; native open/save/reopen remains unverified."))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +168,20 @@ mod tests {
         assert!(error.message.contains("Acknowledge"));
         request["acknowledge_storage_only"] = json!(true);
         assert!(engine.call("formats_project_sp_candidate_write", request, CallOptions::new(Caller::Cli)).is_err());
+        assert!(!output.exists());
+        assert!(!output.with_extension("sp.receipt.json").exists());
+    }
+    #[test]
+    fn task_text_tool_requires_acknowledgement_and_rejects_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("text.sp");
+        let engine = Engine::new(crate::testing::session());
+        let mut request = json!({"path":dir.path().join("absent.sp"), "expected_source_sha256":"0".repeat(64),
+            "output_path":output,"acknowledge_storage_only":false,"edits":[]});
+        let call = |params| engine.call("formats_project_sp_task_text_candidate_write", params, CallOptions::new(Caller::Cli));
+        assert!(call(request.clone()).unwrap_err().message.contains("Acknowledge"));
+        request["acknowledge_storage_only"] = json!(true);
+        assert!(call(request).is_err());
         assert!(!output.exists());
         assert!(!output.with_extension("sp.receipt.json").exists());
     }

@@ -1,7 +1,7 @@
 # Status
 
 What works today and how it was checked. The plan, owners and order of work are in
-[ROADMAP.md](ROADMAP.md). Last updated 2026-11-12. The baseline audit on 2026-10-23 from `main` had 923 tests passing;
+[ROADMAP.md](ROADMAP.md). Last updated 2026-11-13. The baseline audit on 2026-10-23 from `main` had 923 tests passing;
 workspace clippy, layers, fmt and the secret scan of all history were clean. Chinese UI checks are listed separately below.
 
 ## What works, and how it was checked
@@ -31,6 +31,23 @@ temporary synthetic SP; Studio/Planning offscreen images were inspected. Main/CL
 925 UI/engine target tests (15 ignored), clippy and required static checks passed.
 Advanced fields retain source storage units; automatic scheduling, utilization policy
 and general native Save remain unadmitted. See [the supported contract](4d5d-completion.md).
+
+### Guarded task text candidates (R3.14)
+
+A separate headless storage tool changes task names and display IDs with source-hash,
+task-GUID and expected-text guards. It publishes new candidate/receipt files and preserves
+all 47 other stored sections. Unicode, long-name, empty-name and display-ID cases matched
+independent native controls byte-for-byte in decoded Tasks, survived native Save/unload/
+reopen, and produced equal task pages through the latest reader. These four minimal
+controls contain no drawable meshes. A fifth case on a geometry-bearing assigned task
+also matched independent native UI edits and retained two mesh instances after native
+Save/reopen; its focused native screenshot was inspected.
+
+Formats/engine validation passed 2,476 target tests (19 ignored), CLI/check-tool builds,
+all-target clippy, layers, locks, secrets, tools, wasm, doctests and formatting. Nine
+generated text receipts validated against their version-1 schema. This remains an
+experimental candidate workflow; shared draft text forms, structural editing and general
+native Save remain pending. See [the contract and scope](4d5d-completion.md#task-text-storage-candidates).
 
 ### Readable CSV dates and reusable templates (R3.14)
 
