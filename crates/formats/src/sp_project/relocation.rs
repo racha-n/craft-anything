@@ -68,6 +68,8 @@ pub struct Position {
 pub struct Outline {
     pub reason: Option<ScopeReason>,
     pub positions: Vec<Position>,
+    pub hierarchy_hints: Option<Vec<hierarchy::Hint>>,
+    pub hierarchy_reason: String,
 }
 pub(super) fn scope(tasks: &[Task]) -> Option<ScopeReason> {
     if tasks.is_empty() {
@@ -158,7 +160,16 @@ pub fn outline(raw: &[u8], expected_source_sha256: &str, mut keep_going: impl Fn
             positions.push(Position { task_guid: task.guid.clone(), parent_guid: task.parent_guid.clone(), sibling_index: *index, sibling_total: total });
             *index = checked_add(*index, 1)?;
         }
-        Ok(Outline { reason, positions })
+        let (hierarchy_hints, hierarchy_reason) = if let Some(reason) = reason {
+            (None, reason.message().to_owned())
+        } else {
+            match hierarchy::hints(&data, &evidence.tasks, &mut keep_going) {
+                Ok(hints) => (Some(hints), String::new()),
+                Err(error) if error.code == "cancelled" => return Err(error),
+                Err(error) => (None, error.message),
+            }
+        };
+        Ok(Outline { reason, positions, hierarchy_hints, hierarchy_reason })
     })();
     result.map_err(format_error)
 }

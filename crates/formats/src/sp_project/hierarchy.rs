@@ -41,6 +41,66 @@ pub struct Candidate {
     pub receipt: Receipt,
 }
 type Groups<'a> = BTreeMap<Option<&'a str>, Vec<&'a Task>>;
+#[derive(Serialize)]
+pub struct Hint {
+    pub task_guid: String,
+    pub indent: Option<Reparent>,
+    pub outdent: Option<Reparent>,
+    pub indent_depth_limited: bool,
+}
+pub(super) fn hints(data: &[u8], tasks: &[Task], callback: &mut dyn FnMut(f32) -> bool) -> Result<Vec<Hint>> {
+    let groups = groups(tasks);
+    spans(data, tasks, &groups)?;
+    let mut depths = BTreeMap::new();
+    let mut positions = BTreeMap::new();
+    for siblings in groups.values() {
+        for (index, task) in siblings.iter().enumerate() {
+            positions.insert(task.guid.as_str(), index);
+        }
+    }
+    for task in tasks {
+        let depth = match task.parent_guid.as_deref() {
+            None => 0usize,
+            Some(parent) => checked_add(*depths.get(parent).ok_or_else(|| fail("invalid_identity", "Parent depth missing"))?, 1)?,
+        };
+        depths.insert(task.guid.as_str(), depth);
+    }
+    let mut result = Vec::new();
+    for siblings in groups.values() {
+        for (index, task) in siblings.iter().enumerate() {
+            check(callback, 0.95)?;
+            let end = checked_add(task.offset, task.bytes)?;
+            let mut max_depth = 0usize;
+            for descendant in tasks.iter().filter(|t| t.offset >= task.offset && t.offset < end) {
+                max_depth = max_depth.max(*depths.get(descendant.guid.as_str()).ok_or_else(|| fail("invalid_identity", "Task depth missing"))?);
+            }
+            let previous = index.checked_sub(1).and_then(|i| siblings.get(i));
+            let indent_depth_limited = previous.is_some() && max_depth >= 64;
+            let indent = previous.filter(|_| !indent_depth_limited).map(|parent| Reparent {
+                task_guid: task.guid.clone(),
+                expected_parent_guid: task.parent_guid.clone(),
+                expected_sibling_index: index,
+                parent_guid: Some(parent.guid.clone()),
+                sibling_index: groups.get(&Some(parent.guid.as_str())).map_or(0, Vec::len),
+            });
+            let outdent = if let Some(parent) = task.parent_guid.as_deref() {
+                let parent = writer::task_for(tasks, parent)?;
+                let position = *positions.get(parent.guid.as_str()).ok_or_else(|| fail("invalid_identity", "Parent sibling position missing"))?;
+                Some(Reparent {
+                    task_guid: task.guid.clone(),
+                    expected_parent_guid: task.parent_guid.clone(),
+                    expected_sibling_index: index,
+                    parent_guid: parent.parent_guid.clone(),
+                    sibling_index: checked_add(position, 1)?,
+                })
+            } else {
+                None
+            };
+            result.push(Hint { task_guid: task.guid.clone(), indent, outdent, indent_depth_limited });
+        }
+    }
+    Ok(result)
+}
 struct Span {
     flag: usize,
     after_children: usize,

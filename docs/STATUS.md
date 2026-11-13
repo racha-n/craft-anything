@@ -164,7 +164,33 @@ Main/CLI builds and 2,502 formats/engine target tests passed (19 ignored). After
 test-only fixture borrow lint fix, the current eight focused regressions, all-target
 clippy, layers, locks, secrets, tools, wasm, doctests and formatting passed; production
 source stayed identical to the full run. Initial lint output and reused unaffected
-checks are retained. Shared draft and Plan integration remain separate pending work.
+checks are retained. The shared draft extension below adds bounded forms; broader Plan
+admission and native Save remain separate gates.
+
+### Shared task hierarchy drafts (R3.14)
+
+Shared scalar/text history now supports up to eight sequential order/reparent operations.
+Indent/Outdent uses guarded hints from the complete task inventory, including parents
+outside the displayed page. Returning to the original graph compares parent identities
+as well as preorder. A parent change remains dirty when row order stays unchanged.
+Undo/redo, GUID focus, atomic rejection and source/cache isolation remain shared.
+Version-4 export retains typed stage receipts and their hash chain; drafts without
+remaining parent-changing operations retain the existing version-1/2/3 contracts.
+
+Targeted checks passed 59 format regressions, five engine draft tests and ten widget
+tests, plus strict all-target clippy. Both layouts' parent controls and complete
+acknowledgement/export footers were inspected. Three version-4 CLI/widget receipts
+and both legacy widget receipts passed their schemas and complete hash chains.
+CLI mixed-field indent and interleaved order/outdent candidates matched independent
+native Tasks while preserving all 47 other sections and refusing replacement.
+Both passed native Save/unload/reopen and all three complete observed General
+comparisons before/after, totaling 480 properties. Summary/leaf preview dates matched
+the controls, including a summary whose stored start differs from its children's dates.
+Both native screenshots were inspected. General native Save, task creation/deletion
+and scheduler parity remain unadmitted. All 11 frozen checks passed, including main/CLI
+builds, 2,754 target tests (25 ignored), clippy, layers, locks, secrets, tools, wasm,
+doctests and formatting. All 57 protected source hashes remained unchanged.
+See [the contract](4d5d-completion.md#sequential-field-order-and-hierarchy-drafts).
 
 ### Readable CSV dates and reusable templates (R3.14)
 

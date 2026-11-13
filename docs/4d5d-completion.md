@@ -473,3 +473,47 @@ have installed a repaint context. An active draft is brought forward for the sam
 source; a different path/hash preserves it and its unapplied forms until explicitly
 closed. Completed closed panels can be replaced. No source file or retained scene/cache
 is changed by this entry point.
+
+## Sequential field, order and hierarchy drafts
+
+The experimental structured pipeline applies scalar/text edits first and then up to
+eight existing-task relocations, sharing the 256-field/operation limit. Same-parent
+requests use the guarded order writer; different-parent requests use the subtree
+writer. Each request guards the preceding output's parent and sibling position. The
+version-4 receipt retains the mixed receipt and typed order/hierarchy stage receipts
+with their complete hash chain. The headless tool is
+`formats_project_sp_structured_candidate_write`.
+
+Shared history records the whole sequence. Returning to the source graph compares
+both GUID order and parent GUIDs: a parent change remains dirty even when preorder
+stays identical. Restoring the graph clears structural operations while retaining
+field changes and undo history. Exports retain versions 1/2/3 when no parent-changing
+operations remain; version 4 is selected for a retained hierarchy sequence.
+
+The draft form offers guarded Indent and Outdent actions. Indent appends under the
+preceding direct sibling; Outdent inserts after the current parent in its parent's
+collection. Hints use the complete inventory across display pages and respect the
+64-level depth limit. Parent changes can apply atomically with labels and the current
+scalar page. Summary preview dates aggregate children; advanced fields explicitly
+show stored values, which can differ from summary dates. The original viewport and
+source caches remain isolated. Task creation/deletion, general native saving and
+scheduler parity remain separate acceptance gates.
+
+Focused validation passed 59 format regressions, five engine draft cases and ten
+widget tests, plus strict all-target clippy. Actual widgets exercised mixed labels,
+duration, indent/outdent, undo/redo and version-4 export. Both layouts' complete
+footers were inspected after scrolling. Three version-4 CLI/widget receipts and
+the legacy version-2/version-3 widget receipts passed schemas and complete hash chains.
+
+Two latest-CLI candidates combined duration, Unicode labels and either indent alone
+or an interleaved indent/order/outdent sequence. Decoded Tasks matched independent
+native controls exactly; all 47 other sections stayed unchanged and replacement was
+refused. Both candidates passed native Save/unload/reopen, preserving Tasks and all
+three complete General dictionaries before/after (480 property comparisons). Summary
+and leaf preview bounds matched the controls, including child-derived two-day summary
+dates despite a different stored parent start. Both native screenshots were inspected.
+All 11 frozen checks passed: main/CLI builds, ten widget cases, 2,754 target tests
+(25 ignored), strict clippy, layers, locks, secrets, generated tools, wasm, doctests
+and formatting. All 57 protected source hashes remained unchanged. These proofs
+cover the declared small Planned/unassociated subset; they do not admit general
+native saving, task creation/deletion or scheduler parity.

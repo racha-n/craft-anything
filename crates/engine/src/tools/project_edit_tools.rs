@@ -9,7 +9,7 @@ use crate::{
     tool::{parse_params, schema_of},
 };
 use craft_anything_evidence::ToolError;
-use craft_anything_formats::sp_project::{self, draft::Draft, relocation, task_strings::TextEdit, writer::ScalarEdit};
+use craft_anything_formats::sp_project::{self, draft::Draft, hierarchy, relocation, task_strings::TextEdit, writer::ScalarEdit};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -53,6 +53,8 @@ enum Request {
         #[serde(default)]
         order_edits: Vec<relocation::Move>,
         #[serde(default)]
+        relocations: Vec<hierarchy::Reparent>,
+        #[serde(default)]
         focus_task_guid: Option<String>,
     },
     Undo {
@@ -88,7 +90,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![spec(
         "formats_project_edit",
         "Edit a guarded project draft",
-        "Open a source-bound field/order draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. At most eight sibling-order operations; no native saving or rescheduling admission.",
+        "Open a source-bound field/order/hierarchy draft, apply atomic edits with bounded history, undo/redo or publish a separate experimental SP candidate. At most eight sequential task relocations; native saving and general rescheduling remain separate gates.",
         "Preview guarded changes without changing the source project.",
         Toolset::Formats,
         Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
@@ -149,8 +151,15 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             ctx.session.ext.remove::<EditSession>();
             return Ok(ToolOutput::Value(json!({"version":1,"draft_id":session.id,"closed":true})));
         }
-        Request::Apply { revision, edits, text_edits, order_edits, focus_task_guid, .. } => {
-            session.draft.apply_ordered(revision, &edits, &text_edits, &order_edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+        Request::Apply { revision, edits, text_edits, order_edits, relocations, focus_task_guid, .. } => {
+            if !order_edits.is_empty() && !relocations.is_empty() {
+                return Err(ToolError::invalid("Use either legacy order_edits or sequential relocations in one Apply request."));
+            }
+            if relocations.is_empty() {
+                session.draft.apply_ordered(revision, &edits, &text_edits, &order_edits, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            } else {
+                session.draft.apply_structural(revision, &edits, &text_edits, &relocations, |_| !ctx.cancel.is_cancelled()).map_err(ToolError::invalid)?;
+            }
             focus = focus_task_guid;
         }
         Request::Undo { revision, focus_task_guid, .. } => {
@@ -163,6 +172,13 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
         }
         Request::Inspect { offset: value, .. } | Request::Refresh { offset: value, .. } => offset = value,
         Request::WriteCandidate { output_path, acknowledge_storage_only, .. } => {
+            if session.draft.has_hierarchy_edits() {
+                return project_candidate_tools::run_structured(
+                    ctx,
+                    json!({"path":session.path,"expected_source_sha256":session.draft.source_sha256,"output_path":output_path,
+                    "acknowledge_storage_only":acknowledge_storage_only,"edits":session.draft.edits(),"text_edits":session.draft.text_edits(),"relocations":session.draft.structural_edits()}),
+                );
+            }
             if !session.draft.order_edits().is_empty() {
                 return project_candidate_tools::run_ordered(
                     ctx,
@@ -210,6 +226,22 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
     }
     let outline = outline.map_err(|e| format_err(e, "draft task-order admission"))?;
     let positions: std::collections::BTreeMap<_, _> = outline.positions.iter().map(|p| (p.task_guid.as_str(), p)).collect();
+    let hierarchy_hints: std::collections::BTreeMap<_, _> =
+        outline.hierarchy_hints.as_deref().unwrap_or(&[]).iter().map(|h| (h.task_guid.as_str(), h)).collect();
+    let labels: std::collections::BTreeMap<_, _> = tasks.iter().filter_map(|t| t.get("guid").and_then(Value::as_str).map(|id| (id, t))).collect();
+    let parent_label = |id: Option<&str>| -> String {
+        let Some(id) = id else { return "Project root".into() };
+        let Some(task) = labels.get(id) else { return "Unknown parent".into() };
+        let name = task.get("name").and_then(Value::as_str).unwrap_or_default();
+        let display = task.get("display_id").and_then(Value::as_str).unwrap_or_default();
+        let separator = if display.is_empty() { "" } else { " · " };
+        let mut chars = display.chars().chain(separator.chars()).chain(name.chars());
+        let mut label: String = chars.by_ref().take(192).collect();
+        if chars.next().is_some() {
+            label.push('\u{2026}');
+        }
+        label
+    };
     let page = tasks
         .iter()
         .skip(offset)
@@ -221,13 +253,22 @@ fn run(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
             let object = row.as_object_mut().ok_or_else(|| ToolError::invalid("Draft task record missing."))?;
             object.insert("sibling_index".into(), json!(position.sibling_index));
             object.insert("sibling_total".into(), json!(position.sibling_total));
+            object.insert("parent_label".into(), json!(parent_label(position.parent_guid.as_deref())));
+            if let Some(hint) = hierarchy_hints.get(id) {
+                object.insert("indent".into(), json!(hint.indent));
+                object.insert("outdent".into(), json!(hint.outdent));
+                object.insert("indent_depth_limited".into(), json!(hint.indent_depth_limited));
+                object.insert("indent_label".into(), json!(hint.indent.as_ref().map(|r| parent_label(r.parent_guid.as_deref())).unwrap_or_default()));
+                object.insert("outdent_label".into(), json!(hint.outdent.as_ref().map(|r| parent_label(r.parent_guid.as_deref())).unwrap_or_default()));
+            }
             Ok(row)
         })
         .collect::<Result<Vec<_>, ToolError>>()?;
     let result = json!({"version":1,"draft_id":session.id,"source_sha256":session.draft.source_sha256,"draft_sha256":imported.source_sha256,
         "revision":session.draft.revision,"dirty":session.draft.is_dirty(),"can_undo":session.draft.can_undo(),"can_redo":session.draft.can_redo(),
         "edit_count":session.draft.edit_count(),"task_total":tasks.len(),"offset":offset,
-        "order_edit_count":session.draft.order_edits().len(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
+        "order_edit_count":session.draft.structural_edits().len(),"order_edit_limit":sp_project::ordered::ORDER_LIMIT,
+        "hierarchy_supported":outline.hierarchy_hints.is_some(),"hierarchy_reason":outline.hierarchy_reason,
         "order_supported":outline.reason.is_none(),"order_reason":outline.reason.map(|r|r.message()).unwrap_or_default(),
         "tasks":page,"derived_tasks":model.page_tasks(offset,100),
         "native_reopen_verified":false,"derived_schedule_consistency_verified":false});
@@ -294,6 +335,78 @@ mod tests {
             raw[at..at + 8].copy_from_slice(&(offset + delta as u64).to_le_bytes());
         }
         raw
+    }
+    #[test]
+    fn hierarchy_hints_cross_pages_and_same_preorder_parent_changes_stay_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hierarchy.sp");
+        let raw = fixture_count(130);
+        std::fs::write(&path, &raw).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&raw));
+        let metadata = sp_project::parse_metadata(&raw, |_| true).unwrap();
+        let selected = metadata.metadata["tasks"][100]["guid"].as_str().unwrap().to_owned();
+        let parent = metadata.metadata["tasks"][99]["guid"].clone();
+        let engine = Engine::new(crate::testing::session());
+        engine.call("formats_project_tasks_list", json!({"path":path}), CallOptions::new(Caller::Cli)).unwrap();
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let opened = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let id = opened["draft_id"].as_u64().unwrap();
+        let request = |action, revision| json!({"action":action,"draft_id":id,"expected_source_sha256":hash,"revision":revision});
+        let page = call(json!({"action":"refresh","draft_id":id,"expected_source_sha256":hash,"offset":100})).unwrap();
+        assert_eq!(page["hierarchy_supported"], true);
+        assert_eq!(page["tasks"][0]["indent"]["parent_guid"], parent);
+        let mut apply = request("apply", 0);
+        apply["edits"] = json!([]);
+        apply["relocations"] = json!([page["tasks"][0]["indent"]]);
+        apply["focus_task_guid"] = json!(selected);
+        let changed = call(apply).unwrap();
+        assert_eq!(changed["offset"], 100);
+        assert_eq!(changed["tasks"][0]["guid"], selected);
+        assert_eq!(changed["tasks"][0]["parent_guid"], parent);
+        assert_eq!(changed["dirty"], true);
+        assert_eq!(changed["order_edit_count"], 1);
+        assert!(call(json!({"action":"open","path":path,"expected_source_sha256":hash})).is_err());
+        let output = dir.path().join("hierarchy-candidate.sp");
+        let mut export = request("write_candidate", 1);
+        export["output_path"] = json!(output);
+        export["acknowledge_storage_only"] = json!(true);
+        call(export.clone()).unwrap();
+        assert!(call(export).is_err());
+        let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+        assert_eq!(receipt["version"], 4);
+        assert_eq!(receipt["structural_stages"][0]["kind"], "hierarchy");
+        let mut undo = request("undo", 1);
+        undo["focus_task_guid"] = json!(selected);
+        let undone = call(undo).unwrap();
+        assert_eq!(undone["dirty"], false);
+        assert!(undone["tasks"][0]["parent_guid"].is_null());
+        let mut redo = request("redo", 2);
+        redo["focus_task_guid"] = json!(selected);
+        assert_eq!(call(redo).unwrap()["tasks"][0]["parent_guid"], parent);
+        let original = engine.call("formats_project_tasks_list", json!({"path":path}), CallOptions::new(Caller::Cli)).unwrap().to_json();
+        assert!(original["result"]["page"]["items"].as_array().unwrap().iter().all(|t| t["parent_guid"].is_null()));
+        assert_eq!(std::fs::read(path).unwrap(), raw);
+    }
+    #[test]
+    fn invalid_focus_or_ambiguous_structural_request_does_not_publish_a_parent_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.sp");
+        let raw = fixture_count(3);
+        std::fs::write(&path, &raw).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&raw));
+        let engine = Engine::new(crate::testing::session());
+        let call = |p| engine.call("formats_project_edit", p, CallOptions::new(Caller::Cli)).map(|o| o.to_json()["result"].clone());
+        let open = call(json!({"action":"open","path":path,"expected_source_sha256":hash})).unwrap();
+        let id = open["draft_id"].clone();
+        let mut apply = json!({"action":"apply","draft_id":id,"revision":0,"expected_source_sha256":hash,"edits":[],"relocations":[open["tasks"][1]["indent"]],"focus_task_guid":"00000000-0000-0000-0000-000000000000"});
+        assert!(call(apply.clone()).is_err());
+        apply.as_object_mut().unwrap().remove("focus_task_guid");
+        apply["order_edits"] = json!([{"task_guid":open["tasks"][2]["guid"],"expected_parent_guid":null,"expected_sibling_index":2,"sibling_index":0}]);
+        assert!(call(apply).is_err());
+        let inspected = call(json!({"action":"inspect","draft_id":id,"revision":0,"expected_source_sha256":hash})).unwrap();
+        assert_eq!(inspected["draft_sha256"], hash);
+        assert_eq!(inspected["dirty"], false);
+        assert_eq!(std::fs::read(path).unwrap(), raw);
     }
     #[test]
     fn ordered_draft_focus_pages_history_and_publication_stay_source_bound() {

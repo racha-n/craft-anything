@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Experimental structural SP candidate receipt version 4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "source_sha256",
+    "output_sha256",
+    "internal_reparse_passed",
+    "native_reopen_verified",
+    "derived_schedule_consistency_verified",
+    "limitations",
+    "mixed_stage",
+    "structural_stages"
+  ],
+  "properties": {
+    "version": {
+      "const": 4
+    },
+    "source_sha256": {
+      "$ref": "#/$defs/hash"
+    },
+    "output_sha256": {
+      "$ref": "#/$defs/hash"
+    },
+    "internal_reparse_passed": {
+      "const": true
+    },
+    "native_reopen_verified": {
+      "const": false
+    },
+    "derived_schedule_consistency_verified": {
+      "const": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "mixed_stage": {
+      "$ref": "sp-mixed-candidate-receipt-v2.schema.json"
+    },
+    "structural_stages": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "receipt"
+            ],
+            "properties": {
+              "kind": {
+                "const": "order"
+              },
+              "receipt": {
+                "$ref": "sp-task-order-candidate-receipt-v2.schema.json"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "receipt"
+            ],
+            "properties": {
+              "kind": {
+                "const": "hierarchy"
+              },
+              "receipt": {
+                "$ref": "sp-task-hierarchy-candidate-receipt-v1.schema.json"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "description": "Consumers must additionally verify the complete mixed/order source/intermediate/output hash chain, at most eight order operations, and at most 256 fields and order operations combined."
+}

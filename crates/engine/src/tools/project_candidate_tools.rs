@@ -10,7 +10,7 @@ use crate::{
 use craft_anything_evidence::{Confidence, Limitation, ToolError};
 use craft_anything_formats::sp_project::task_strings::{self, TextEdit};
 use craft_anything_formats::sp_project::writer::{self, ScalarEdit};
-use craft_anything_formats::sp_project::{hierarchy, mixed, ordered, relocation};
+use craft_anything_formats::sp_project::{hierarchy, mixed, ordered, relocation, structured};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -63,6 +63,20 @@ struct HierarchyRequest {
     output_path: String,
     acknowledge_storage_only: bool,
     relocation: hierarchy::Reparent,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StructuredRequest {
+    path: String,
+    expected_source_sha256: String,
+    output_path: String,
+    acknowledge_storage_only: bool,
+    #[serde(default)]
+    edits: Vec<ScalarEdit>,
+    #[serde(default)]
+    text_edits: Vec<TextEdit>,
+    #[serde(default)]
+    relocations: Vec<hierarchy::Reparent>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +159,17 @@ pub fn specs() -> Vec<ToolSpec> {
             Requires::Nothing,
             schema_of::<HierarchyRequest>,
             run_hierarchy,
+        ),
+        spec(
+            "formats_project_sp_structured_candidate_write",
+            "Write an experimental structural SP candidate",
+            "Compose source-bound scalar/text edits and up to eight sequential existing-task order/reparent operations. Publish a version-4 receipt retaining typed mixed/order/hierarchy stages and their hash chain. Parent/position guards bind to each preceding stage; native saving and scheduling remain separate gates.",
+            "Export a separate test copy containing field and hierarchy changes, then validate it in the source application.",
+            Toolset::Formats,
+            Effects::WRITES_FILESYSTEM.union(Effects::EVIDENCE).union(Effects::CARRIES_TARGET_CONTENT),
+            Requires::Nothing,
+            schema_of::<StructuredRequest>,
+            run_structured,
         ),
     ]
 }
@@ -299,6 +324,40 @@ fn run_hierarchy(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolErr
         .limitation(Limitation::new(
             "native_persistence_unverified",
             "Task identity/body fields and lookup indices passed internal validation. Native persistence, summary dates and schedule coordination remain unverified.",
+        ))
+        .target_content(true)
+        .build()?;
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let parent = output.parent().ok_or_else(|| ToolError::invalid("Choose an output parent directory."))?;
+    publish(parent, &output, &receipt_path, &candidate.bytes, &receipt)?;
+    Ok(ToolOutput::evidence(evidence))
+}
+
+pub(super) fn run_structured(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput, ToolError> {
+    let p: StructuredRequest = parse_params(params.clone())?;
+    if !p.acknowledge_storage_only {
+        return Err(ToolError::invalid("Acknowledge storage-only candidate generation; native compatibility is unverified."));
+    }
+    let (output, receipt_path) = output_paths(&p.output_path)?;
+    let input = load_path(&p.path, 256 * 1024 * 1024)?;
+    let candidate = structured::candidate(&input.bytes, &p.expected_source_sha256, &p.edits, &p.text_edits, &p.relocations, |progress| {
+        ctx.report(Some(progress), "Preparing experimental structural candidate");
+        !ctx.cancel.is_cancelled()
+    });
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::cancelled());
+    }
+    let candidate = candidate.map_err(|e| format_err(e, "an admitted structural candidate"))?;
+    let receipt = serde_json::to_vec_pretty(&candidate.receipt).map_err(|e| ToolError::invalid(e.to_string()))?;
+    let evidence = builder(ctx, "formats_project_sp_structured_candidate_write", input.subject, params)
+        .summary("Prepared an experimental structural candidate")
+        .confidence(Confidence::Derived)
+        .result(json!({"output_path":output,"receipt_path":receipt_path,"receipt":candidate.receipt}))
+        .limitation(Limitation::new(
+            "native_persistence_unverified",
+            "Stage hash-chain and internal guards passed; native saving and schedule coordination remain separate acceptance gates.",
         ))
         .target_content(true)
         .build()?;

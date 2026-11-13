@@ -11,6 +11,7 @@ mod resource_tree;
 mod scene_geometry;
 mod scene_graph;
 mod scene_io;
+pub mod structured;
 pub mod task_strings;
 pub mod writer;
 use crate::{FormatError, scene_bundle};

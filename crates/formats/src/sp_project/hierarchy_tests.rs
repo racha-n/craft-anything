@@ -129,6 +129,27 @@ fn noncanonical_empty_child_lists_are_not_silently_normalized() {
     assert!(parse_metadata(&raw, |_| true).is_ok());
     let hash = writer::hash(&raw, &mut |_| true).unwrap();
     assert!(candidate(&raw, &hash, &request(2, None, 1, Some(1), 0), |_| true).is_err());
+    let outline = relocation::outline(&raw, &hash, |_| true).unwrap();
+    assert!(outline.reason.is_none());
+    assert!(outline.hierarchy_hints.is_none());
+    assert!(!outline.hierarchy_reason.is_empty());
+}
+
+#[test]
+fn hierarchy_hints_use_complete_sibling_and_grandparent_positions() {
+    let raw = project(&[record(3), nest(record(1), &[record(2), record(4)])]);
+    let outline = relocation::outline(&raw, &writer::hash(&raw, &mut |_| true).unwrap(), |_| true).unwrap();
+    let hints = outline.hierarchy_hints.unwrap();
+    let parent = hints.iter().find(|h| h.task_guid == id(1)).unwrap();
+    assert_eq!(parent.indent.as_ref().unwrap().parent_guid, Some(id(3)));
+    let first = hints.iter().find(|h| h.task_guid == id(2)).unwrap();
+    assert!(first.indent.is_none());
+    let outdent = first.outdent.as_ref().unwrap();
+    assert!(outdent.parent_guid.is_none());
+    assert_eq!(outdent.sibling_index, 2);
+    let second = hints.iter().find(|h| h.task_guid == id(4)).unwrap();
+    assert_eq!(second.indent.as_ref().unwrap().parent_guid, Some(id(2)));
+    assert_eq!(second.indent.as_ref().unwrap().sibling_index, 0);
 }
 
 #[test]
@@ -143,6 +164,17 @@ fn refuses_a_move_that_exceeds_the_depth_limit() {
     assert!(candidate(&raw, &hash, &request(66, None, 1, Some(65), 0), |_| true).is_err());
     let allowed = apply(&raw, &request(66, None, 1, Some(64), 1));
     assert_eq!(tasks(&payload(&allowed.bytes), &mut |_| true).unwrap().len(), 66);
+    let reordered = relocation::candidate(
+        &raw,
+        &hash,
+        &relocation::Move { task_guid: id(66), expected_parent_guid: None, expected_sibling_index: 1, sibling_index: 0 },
+        |_| true,
+    )
+    .unwrap();
+    let outline = relocation::outline(&reordered.bytes, &reordered.receipt.output_sha256, |_| true).unwrap();
+    let hints = outline.hierarchy_hints.unwrap();
+    let root = hints.iter().find(|h| h.task_guid == id(1)).unwrap();
+    assert!(root.indent_depth_limited && root.indent.is_none());
 }
 
 #[test]

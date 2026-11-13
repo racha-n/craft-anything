@@ -316,6 +316,8 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
         order_edit_limit: ORDER_LIMIT,
         order_supported: false,
         order_reason: "Assigned-task ordering remains outside the admitted subset.".into(),
+        hierarchy_supported: false,
+        hierarchy_reason: String::new(),
         task_total: 1,
         offset: 0,
         derived_tasks: DerivedPage { items: vec![] },
@@ -326,6 +328,12 @@ fn snapshot(id: u64, revision: u64) -> Snapshot {
             parent_guid: None,
             sibling_index: 0,
             sibling_total: 1,
+            parent_label: "Project root".into(),
+            indent: None,
+            outdent: None,
+            indent_label: String::new(),
+            outdent_label: String::new(),
+            indent_depth_limited: false,
             planned_start_wallclock_scalar: 100,
             duration_storage_scalar: 86400,
             assignments: vec![
@@ -368,6 +376,111 @@ fn reordered_snapshot_preserves_selected_guid_and_rejects_invalid_positions() {
     state.order_position = 2;
     assert!(state.accept(next, &source, Some(1)).is_err());
     assert_eq!(state.order_position, 2);
+}
+
+#[test]
+fn widget_hierarchy_labels_and_scalar_edits_share_history_and_version_four_export() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sp");
+    let raw = metadata_fixture_count(3);
+    std::fs::write(&path, &raw).unwrap();
+    let hash = craft_anything_formats::sp_project::parse_metadata(&raw, |_| true).unwrap().source_sha256;
+    let engine = Arc::new(Engine::new(craft_anything_engine::testing::session()));
+    let panel = DraftPanel::new(engine, path.to_string_lossy().into_owned(), hash);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100., 1000.)).build_ui_state(|ui, panel: &mut DraftPanel| panel.show(ui.ctx()), panel);
+    crate::theme::install_fonts(&h.ctx);
+    settle(&mut h);
+    let parent = h.state().state.snapshot.as_ref().unwrap().tasks[0].guid.clone();
+    h.get_by_value("1 · A").click();
+    h.run();
+    h.get_by_label("1 · B").click();
+    h.run();
+    let selected = h.state().state.snapshot.as_ref().unwrap().tasks[1].guid.clone();
+    h.get_by_label("Task hierarchy").click();
+    h.run();
+    h.get_by_label("Indent").click();
+    h.run();
+    assert_eq!(h.state().state.parent_change.as_ref().unwrap().parent_guid, Some(parent.clone()));
+    h.get_by_label("Task labels").click();
+    h.run();
+    let renamed = "Nested_\u{0e07}\u{0e32}\u{0e19}_\u{6881}_\u{1f600}";
+    for (label, text) in [("Task name", renamed), ("Display ID", "ST_nested_20")] {
+        h.get_by_label(label).focus();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        h.get_by_label(label).type_text(text);
+        h.run_steps(2);
+    }
+    h.state_mut().state.fields.iter_mut().find(|f| matches!(f.original, ScalarEdit::TaskDuration { .. })).unwrap().text = "57600".into();
+    h.run();
+    h.get_by_label("Apply to draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Apply to draft").click();
+    settle(&mut h);
+    let current = h.state().state.snapshot.as_ref().unwrap();
+    assert!(current.dirty);
+    assert_eq!(current.edit_count, 4);
+    assert_eq!(current.order_edit_count, 1);
+    assert_eq!(current.tasks[1].guid, selected);
+    assert_eq!(current.tasks[1].parent_guid, Some(parent.clone()));
+    assert!(h.state().state.parent_change.is_none());
+    h.get_by_label("Undo").scroll_to_me();
+    h.run();
+    h.get_by_label("Undo").click();
+    settle(&mut h);
+    assert!(!h.state().state.snapshot.as_ref().unwrap().dirty);
+    h.get_by_label("Redo").click();
+    settle(&mut h);
+    assert_eq!(h.state().state.snapshot.as_ref().unwrap().tasks[1].parent_guid, Some(parent));
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (name, planning) in [("hierarchy-draft-studio.png", false), ("hierarchy-draft-planning.png", true)] {
+            h.state_mut().state.planning = planning;
+            h.run();
+            let image = folder.join(name);
+            assert!(!image.exists());
+            h.render().unwrap().save(image).unwrap();
+            h.get_by_label("Export candidate").scroll_to_me();
+            h.run();
+            let footer = folder.join(format!("hierarchy-draft-{}-footer.png", if planning { "planning" } else { "studio" }));
+            assert!(!footer.exists());
+            h.render().unwrap().save(footer).unwrap();
+        }
+    }
+    let output = dir.path().join("hierarchy.sp");
+    h.state_mut().state.output = output.to_string_lossy().into_owned();
+    h.get_by_label("I will validate this experimental candidate in the native application.").scroll_to_me();
+    h.run();
+    h.get_by_label("I will validate this experimental candidate in the native application.").click();
+    h.run();
+    h.get_by_label("Export candidate").scroll_to_me();
+    h.run();
+    h.get_by_label("Export candidate").click();
+    settle(&mut h);
+    let receipt: Value = serde_json::from_slice(&std::fs::read(output.with_extension("sp.receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["version"], 4);
+    assert_eq!(receipt["structural_stages"][0]["kind"], "hierarchy");
+    assert_eq!(receipt["mixed_stage"]["output_sha256"], receipt["structural_stages"][0]["receipt"]["source_sha256"]);
+    if let Ok(folder) = std::env::var("CRAFT_ANYTHING_DRAFT_UI_QA_DIR") {
+        std::fs::write(std::path::PathBuf::from(folder).join("structural-widget-receipt.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+    h.get_by_label("Outdent").scroll_to_me();
+    h.run();
+    h.get_by_label("Outdent").click();
+    h.run();
+    h.get_by_label("Apply to draft").scroll_to_me();
+    h.run();
+    h.get_by_label("Apply to draft").click();
+    settle(&mut h);
+    let restored = h.state().state.snapshot.as_ref().unwrap();
+    assert!(restored.tasks[1].parent_guid.is_none());
+    assert_eq!(restored.order_edit_count, 0);
+    assert_eq!(restored.edit_count, 3);
+    assert_eq!(restored.tasks[1].name, renamed);
+    assert_eq!(std::fs::read(path).unwrap(), raw);
 }
 
 #[test]
