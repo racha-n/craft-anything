@@ -579,3 +579,42 @@ chains. All 57 protected sources stayed unchanged.
 The developer `scene_snapshot --lookup-only` mode captures both layouts without the
 broader camera/video workflow. Invalid geometry controls are tested only in our
 safe Rust parser/viewer; no new native application run is performed for this change.
+
+## Default-task constructor controls
+
+Three independent native controls create a Planned Work task above an existing leaf:
+two root cases with different selected starts/durations, and one nonempty child
+collection. All use Project Calendar. The new task starts at the selected task's
+stored start and has a one-day duration (28,800 raw units), including when the
+selected task lasts two days. Fixed duration, Automatic progress and unset baseline,
+actual and constraint dates are retained in the observed default profile.
+
+Each new task has a new primary GUID and a distinct, nonzero Supply Chain ID. The
+Supply Chain serializer's first identity is independent of the second supplier
+identity, which stays nil in these controls. All three default bodies match after
+excluding the explicitly varied identities, strings and start/duration. All existing
+three task bodies remain byte-identical when child framing and collection lookup
+entries are excluded. Root and child lookup vectors remain consistent.
+
+Native creation plus renaming changes five stored sections: Tasks, ProjectStateIndex,
+LastTransactionID, Thumbnail and PresentationData. The state index increases by two
+over that two-action sequence. New task GUIDs occur in Tasks and PresentationData;
+the Supply Chain ID occurs only in Tasks among the inspected decoded sections.
+These observations do not establish a general transaction or deletion policy.
+Automatic display IDs vary across the cases; no general generation rule is admitted.
+
+All three controls passed native Save As, unload and reopen with their complete new
+task General dictionaries unchanged (123 property comparisons). The existing CLI
+read four identities and valid lookups from every saved control. Three native images
+were inspected; all 57 protected source hashes stayed unchanged. Production code and
+build inputs match the prior 815-file validated freeze, so its checks are reused by
+source identity. No new application capability or geometry-creation claim is made.
+
+The next candidate must use explicit unique identities/ID, validate the entire
+source-owned default body and insert only above an existing Work leaf in the same
+collection. A Tasks-only storage candidate preserves other sections; it does not
+reproduce native transaction or presentation history. Three diagnostic prototypes
+match the controls' Tasks bytes and preserve all 47 other stored sections; their
+native all-task round-trip acceptance is still pending. General constructor
+completeness, task deletion, native row identity and generic native Save remain
+unadmitted. Shared draft/UI creation requires a separately claimed implementation.

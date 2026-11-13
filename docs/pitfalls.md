@@ -4,8 +4,9 @@
 default-action acknowledgement left task hierarchy bytes unchanged. A physical click
 on the freshly observed menu item performed the operation. Verify changed application
 state before saving and compare after unloading/reopening; dispatch is not acceptance.
-The trailing task word also survived sibling reordering unchanged while changing in
-an indent/outdent pair. Preserve it as opaque; do not rewrite it as a display ordinal.
+Later three-task controls corrected the initial trailing-word hypothesis: the words
+form each collection's raw-GUID-sorted lookup vector. Validate/rebuild that vector;
+do not treat its entries as per-task values or display ordinals.
 
 **An empty incremental path wrote compiler cache into the repository root.** Passing
 `-C incremental=` on Windows created a crate cache in the current directory rather

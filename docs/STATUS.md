@@ -236,6 +236,24 @@ sources in both layouts; all six scene images and two metadata images were inspe
 Five legacy/structural receipts passed schemas and complete chains, and all 57 protected
 sources stayed unchanged. No new native source-application run was performed.
 
+### Default Work constructor controls (R3.14)
+
+Three small native controls passed Save As/unload/reopen: two root insertions with
+different selected dates/durations, and one nonempty child collection. All 123 new
+task General values matched before/after. The default task uses the selected stored
+start, one-day duration and separate primary/Supply Chain identities. Existing task
+bodies stayed unchanged, and the parser read four identities with valid collection
+lookup vectors in every saved file. Three native images and all 57 protected hashes
+were checked; production inputs match the prior validated 815-file freeze.
+
+Creation plus renaming also changes the native state index, transaction identity and
+presentation/thumbnail sections. Automatic display-ID generation and general
+transaction/deletion rules remain unresolved. Tasks-only diagnostic prototypes match
+the control task bytes and preserve all 47 other sections; their all-task native
+acceptance is pending. No production creation/deletion capability, geometry-creation
+coverage or generic native Save admission is added. See
+[the constructor boundary](4d5d-completion.md#default-task-constructor-controls).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,
