@@ -120,3 +120,46 @@ Task payloads remain exact through that round trip; both candidate hashes and al
 57 protected source hashes stay unchanged. Two final native images were inspected.
 This admits the bounded storage candidate, not generic deletion, native Save,
 scheduling, draft integration or a deletion UI.
+
+## Presentation rows after unsaved creation
+
+Creation candidates preserve the saved presentation map, so their newly generated
+task GUID can be absent from its rows. Three retained candidate/native pairs show
+that a later native save adds exactly that generated row while preserving existing
+rows and Task bytes. Those earlier tests selected all tasks before saving and did
+not isolate the effect of that selection.
+
+Two independent controls now open the same admitted unassigned Planned root-task
+candidate and save, unload and reopen it. One never explicitly selects the new
+task; the other visits it first. Both add the same sorted 35-byte row. In the
+no-visit case, inserting that row reconstructs the entire native PresentationData
+exactly. In the visit case, the reconstruction differs only in the independently
+validated task-selection packet. The new row's seven opaque bytes are recorded,
+not interpreted; this does not establish their semantics for other task kinds.
+The explicit visit also matches all 41 General values with its accepted control.
+
+Two further native controls delete either the created task or an existing root
+from fresh copies of that candidate. Both save, unload and reopen, retain all
+surviving General values in 328 comparisons and preserve each surviving task body
+apart from the rebuilt collection-lookup word. Simple leaf removal, root count and
+lookup reconstruction match native Tasks exactly; the resulting lookup vectors
+are `[1, 2, 0]` and `[1, 0, 2]`. Deleted task and Supply Chain binary GUID references
+are absent from the 48 decoded sections inspected by this study. Two native images
+were inspected and all 57 protected source hashes remain unchanged.
+
+Completing the known created row and then applying guarded deletion reconstructs
+native PresentationData exactly for the existing-task target. For the created-task
+target, only selection differs, and native Tasks return exactly to their
+pre-creation bytes. Native deletion also changes ProjectStateIndex,
+LastTransactionID and Thumbnail; those changes are not reproduced or admitted as
+native transaction-history equivalence.
+
+These four new native round trips establish a bounded row-state prerequisite,
+not an enabled production composition. Production source and all receipt schemas
+remain unchanged. A separate implementation must bind any row completion to the
+actual preceding creation recipes and current bytes, preserve all existing rows,
+retain the authoritative deletion reference/body/lookup guards and use a new typed
+receipt contract. Earlier creation stages must keep their historical bytes rather
+than changing retroactively when a later deletion is requested. Deletion after
+unsaved creation remains disabled until that implementation passes independent
+candidate, history, UI and native acceptance. Generic deletion remains unadmitted.

@@ -405,6 +405,18 @@ frame comparisons retain two instances and one definition; all 57 protected sour
 hashes remain unchanged. Generic deletion, deletion after unsaved creation, native
 transaction-history equivalence, general scheduling and generic Save remain open.
 
+### Post-creation presentation study (R3.14)
+
+Four new native save/unload/reopen controls isolate generated-row construction
+with/without explicit selection and deletion of a created versus an existing task.
+The row insertion projection matches native PresentationData exactly without a
+visit, and differs only by selection after a visit. Both deletions retain General
+values in 328 comparisons and preserve surviving task bodies with exact count/
+lookup reconstruction. Two images and 57 protected hashes pass; all 839 validated
+production source/schema files remain unchanged. This is prerequisite evidence;
+post-creation deletion stays disabled pending provenance-bound row completion and
+candidate/history/UI/native acceptance. See [the study](sp-task-deletion-controls.md#presentation-rows-after-unsaved-creation).
+
 ### Readable CSV dates and reusable templates (R3.14)
 
 Reports and Schedule only offer All tables with dates, Schedule review, Cost review,
